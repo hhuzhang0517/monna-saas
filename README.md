@@ -137,5 +137,3 @@ vercel.json                     ← 可选：Cron 任务
 * 移动端：React Native / Expo 使用 `signInWithOAuth({ provider, redirectTo })` + Stripe PaymentSheet 调起 Apple Pay / Google Pay。
 
 ---
-
-如需我继续辅助，你可以让我直接发 PR，或帮你补全移动端调用逻辑、支付接口、UI 接入等。祝你快速上线产品！
