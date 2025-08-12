@@ -1,18 +1,38 @@
-import { createClient } from "@supabase/supabase-js";
+import { createServiceClient } from './supabase/server'
 
-const s = () =>
-  createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+export async function uploadToStorage(
+  buffer: Buffer,
+  fileName: string,
+  contentType: string = 'image/png'
+): Promise<string> {
+  const supabase = await createServiceClient()
+  
+  const path = `${Date.now()}_${fileName}`
+  
+  const { error } = await supabase.storage
+    .from('results')
+    .upload(path, buffer, {
+      contentType,
+      cacheControl: '3600',
+      upsert: false
+    })
 
-export async function putAndGetUrl(path: string, bytes: Uint8Array, contentType = "image/png") {
-  const supa = s();
-  const { error } = await supa.storage.from("results").upload(path, bytes, {
-    upsert: true, contentType, cacheControl: "31536000",
-  });
-  if (error) throw error;
-  const { data, error: e2 } = await supa.storage.from("results").createSignedUrl(path, 60 * 60 * 24);
-  if (e2) throw e2;
-  return data.signedUrl;
+  if (error) {
+    throw new Error(`Storage upload failed: ${error.message}`)
+  }
+
+  // 获取签名URL（CDN加速）
+  const { data } = supabase.storage
+    .from('results')
+    .getPublicUrl(path)
+
+  return data.publicUrl
+}
+
+export async function downloadFromUrl(url: string): Promise<Buffer> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Failed to download from URL: ${response.statusText}`)
+  }
+  return Buffer.from(await response.arrayBuffer())
 }
