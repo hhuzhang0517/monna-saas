@@ -1,17 +1,35 @@
-import OpenAI from "openai";
-import { putAndGetUrl } from "@/lib/storage";
+import OpenAI from 'openai'
+import { uploadToStorage } from '../storage'
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+})
 
-export async function generateImageOpenAI(prompt: string) {
-  const res = await client.images.generate({
-    model: "dall-e-3",
-    prompt,
-    size: "1024x1024",
-    response_format: "b64_json",    // 用 base64 便于落库
-  });
-  const b64 = res.data[0].b64_json!;
-  const bytes = Buffer.from(b64, "base64");
-  const url = await putAndGetUrl(`openai/${crypto.randomUUID()}.png`, bytes, "image/png");
-  return { url };
+export async function generateWithOpenAI(prompt: string): Promise<string> {
+  try {
+    const response = await openai.images.generate({
+      model: "dall-e-3",
+      prompt,
+      n: 1,
+      size: "1024x1024",
+      quality: "standard",
+      response_format: "b64_json",
+    })
+
+    const base64Data = response.data[0].b64_json
+    if (!base64Data) {
+      throw new Error('No image data received from OpenAI')
+    }
+
+    // 转换base64为Buffer
+    const buffer = Buffer.from(base64Data, 'base64')
+    
+    // 上传到Supabase Storage
+    const url = await uploadToStorage(buffer, 'openai-image.png', 'image/png')
+    
+    return url
+  } catch (error: any) {
+    console.error('OpenAI generation error:', error)
+    throw new Error(`OpenAI generation failed: ${error?.message || 'Unknown error'}`)
+  }
 }
