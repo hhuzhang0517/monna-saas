@@ -1,30 +1,48 @@
-import { inngest } from "@/inngest/client";
-import { createSupabaseServer } from "@/lib/supabase/server";
+import { inngest } from '../client'
+import { createServiceClient } from '@/lib/supabase/server'
 
 export const cleanupJobs = inngest.createFunction(
-  { id: "cleanup-jobs" }, 
-  { cron: "0 * * * *" },
-  async () => {
-    const supabase = createSupabaseServer();
+  {
+    id: 'cleanup-jobs',
+    name: 'Cleanup Old Jobs',
+  },
+  { cron: '0 * * * *' }, // 每小时运行一次
+  async ({ step }) => {
+    const supabase = await createServiceClient()
     
-    // 清理超过24小时的失败任务
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    // 清理超过1小时还在processing状态的任务
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
     
-    await supabase
-      .from("jobs")
-      .delete()
-      .eq("status", "failed")
-      .lt("created_at", twentyFourHoursAgo);
+    const { data: stuckJobs, error: fetchError } = await supabase
+      .from('jobs')
+      .select('id')
+      .eq('status', 'processing')
+      .lt('updated_at', oneHourAgo)
     
-    // 清理超过7天的已完成任务
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    if (fetchError) {
+      throw new Error(`Failed to fetch stuck jobs: ${fetchError.message}`)
+    }
     
-    await supabase
-      .from("jobs")
-      .delete()
-      .eq("status", "done")
-      .lt("created_at", sevenDaysAgo);
+    if (stuckJobs && stuckJobs.length > 0) {
+      const { error: updateError } = await supabase
+        .from('jobs')
+        .update({ 
+          status: 'failed',
+          updated_at: new Date().toISOString()
+        })
+        .in('id', stuckJobs.map(job => job.id))
+      
+      if (updateError) {
+        throw new Error(`Failed to update stuck jobs: ${updateError.message}`)
+      }
+      
+      return {
+        message: `Cleaned up ${stuckJobs.length} stuck jobs`
+      }
+    }
     
-    return { ok: true };
+    return {
+      message: 'No stuck jobs found'
+    }
   }
-);
+)
