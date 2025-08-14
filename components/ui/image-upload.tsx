@@ -1,0 +1,115 @@
+"use client";
+
+import { useState, useRef } from "react";
+import { Upload, X, Image as ImageIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+
+interface ImageUploadProps {
+  onImageSelect: (file: File) => void;
+  selectedImage?: File | null;
+  className?: string;
+}
+
+export function ImageUpload({ onImageSelect, selectedImage, className }: ImageUploadProps) {
+  const [dragActive, setDragActive] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      if (file.type.startsWith("image/")) {
+        onImageSelect(file);
+      }
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      if (file.type.startsWith("image/")) {
+        onImageSelect(file);
+      }
+    }
+  };
+
+  const onButtonClick = () => {
+    inputRef.current?.click();
+  };
+
+  return (
+    <div className={cn("w-full", className)}>
+      <div
+        className={cn(
+          "relative border-2 border-dashed border-gray-300 rounded-lg p-6 transition-colors",
+          dragActive && "border-blue-500 bg-blue-50",
+          "hover:border-gray-400"
+        )}
+        onDragEnter={handleDrag}
+        onDragLeave={handleDrag}
+        onDragOver={handleDrag}
+        onDrop={handleDrop}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          className="hidden"
+          accept="image/*"
+          onChange={handleChange}
+        />
+
+        {selectedImage ? (
+          <div className="relative">
+            <img
+              src={URL.createObjectURL(selectedImage)}
+              alt="Selected"
+              className="w-full h-48 object-cover rounded-lg"
+            />
+            <Button
+              size="sm"
+              variant="destructive"
+              className="absolute top-2 right-2"
+              onClick={(e) => {
+                e.stopPropagation();
+                onImageSelect(null as any);
+              }}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div className="text-center">
+            <ImageIcon className="mx-auto h-12 w-12 text-gray-400" />
+            <div className="mt-4">
+              <Button type="button" onClick={onButtonClick}>
+                <Upload className="mr-2 h-4 w-4" />
+                上传人像照片
+              </Button>
+            </div>
+            <p className="mt-2 text-sm text-gray-500">
+              或拖拽图片到此处
+            </p>
+            <p className="text-xs text-gray-400 mt-1">
+              支持 JPG, PNG, WEBP 格式
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,219 +1,258 @@
+"use client";
 
-'use client'
+import { useState } from "react";
+import { ImageUpload } from "@/components/ui/image-upload";
+import { GenerationModal } from "@/components/generation-modal";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { X } from "lucide-react";
 
-import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import useSWR from 'swr'
-
-type Provider = 'openai' | 'gemini' | 'ideogram'
-
-export default function GeneratePage() {
-  const [prompt, setPrompt] = useState('')
-  const [provider, setProvider] = useState<Provider>('openai')
-  const [loading, setLoading] = useState(false)
-  const [jobId, setJobId] = useState<string | null>(null)
-  
-  const supabase = createClient()
-
-  // 轮询任务状态
-  const { data: job, error, mutate } = useSWR(
-    jobId ? `/api/jobs?id=${jobId}` : null,
-    async (url) => {
-      const res = await fetch(url)
-      if (!res.ok) throw new Error('Failed to fetch')
-      return res.json()
-    },
-    {
-      refreshInterval: job?.status === 'done' || job?.status === 'failed' ? 0 : 2000,
-    }
-  )
-
-  const handleGenerate = async () => {
-    if (!prompt.trim()) {
-      alert('Please enter a prompt')
-      return
-    }
-
-    setLoading(true)
-    setJobId(null)
-
-    try {
-      const response = await fetch('/api/jobs', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          provider,
-          prompt,
-          type: 'image',
-        }),
-      })
-
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to create job')
-      }
-
-      const data = await response.json()
-      setJobId(data.id)
-    } catch (error: any) {
-      alert(error.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-zinc-900 to-zinc-800 text-white p-8">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold mb-8 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-          AI Image Generator
-        </h1>
-
-        <div className="bg-zinc-800/50 backdrop-blur-sm rounded-xl p-6 shadow-xl border border-zinc-700">
-          {/* Provider Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-2">AI Provider</label>
-            <div className="grid grid-cols-3 gap-3">
-              {(['openai', 'gemini', 'ideogram'] as const).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setProvider(p)}
-                  className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                    provider === p
-                      ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/25'
-                      : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
-                  }`}
-                >
-                  {p.charAt(0).toUpperCase() + p.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Prompt Input */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-2">Prompt</label>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the image you want to generate..."
-              className="w-full h-32 px-4 py-3 bg-zinc-700/50 border border-zinc-600 rounded-lg text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
-              disabled={loading}
-            />
-          </div>
-
-          {/* Generate Button */}
-          <button
-            onClick={handleGenerate}
-            disabled={loading || !prompt.trim()}
-            className="w-full py-3 px-6 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-[1.02] transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-          >
-            {loading ? 'Creating Job...' : 'Generate Image'}
-          </button>
-        </div>
-
-        {/* Job Status */}
-        {jobId && job && (
-          <div className="mt-8 bg-zinc-800/50 backdrop-blur-sm rounded-xl p-6 shadow-xl border border-zinc-700">
-            <h2 className="text-xl font-semibold mb-4">Generation Status</h2>
-            
-            <div className="flex items-center space-x-3 mb-4">
-              <div className={`w-3 h-3 rounded-full animate-pulse ${
-                job.status === 'queued' ? 'bg-yellow-500' :
-                job.status === 'processing' ? 'bg-blue-500' :
-                job.status === 'done' ? 'bg-green-500' :
-                'bg-red-500'
-              }`} />
-              <span className="text-lg capitalize">{job.status}</span>
-            </div>
-
-            {job.status === 'processing' && (
-              <div className="flex items-center space-x-2">
-                <svg className="animate-spin h-5 w-5 text-purple-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span className="text-zinc-400">Generating your image...</span>
-              </div>
-            )}
-
-            {job.status === 'done' && job.result_url && (
-              <div className="mt-6">
-                <img
-                  src={job.result_url}
-                  alt="Generated image"
-                  className="w-full rounded-lg shadow-2xl"
-                />
-                <div className="mt-4 flex gap-3">
-                  <a
-                    href={job.result_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 py-2 px-4 bg-zinc-700 hover:bg-zinc-600 text-center rounded-lg transition-colors"
-                  >
-                    Open Full Size
-                  </a>
-                  <button
-                    onClick={() => {
-                      setJobId(null)
-                      setPrompt('')
-                    }}
-                    className="flex-1 py-2 px-4 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors"
-                  >
-                    Generate Another
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {job.status === 'failed' && (
-              <div className="mt-4 p-4 bg-red-900/20 border border-red-700 rounded-lg">
-                <p className="text-red-400">Generation failed. Please try again.</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Recent Jobs */}
-        <RecentJobs />
-      </div>
-    </div>
-  )
+interface FigmaTemplate {
+  id: string;
+  name: string;
+  image: string;
+  category: string;
+  prompt: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-function RecentJobs() {
-  const { data, error, isLoading } = useSWR('/api/jobs', async (url) => {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error('Failed to fetch')
-    return res.json()
-  })
+// 从 Figma 获取的真实图片区域数据
+const FIGMA_IMAGE_AREAS: FigmaTemplate[] = [
+  { id: "figma-img-1", name: "图片1", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 11, y: 0, width: 284, height: 160 },
+  { id: "figma-img-2", name: "图片2", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 297, y: 0, width: 284, height: 427 },
+  { id: "figma-img-3", name: "图片3", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 584, y: 0, width: 284, height: 427 },
+  { id: "figma-img-4", name: "图片4", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 870, y: 0, width: 284, height: 506 },
+  { id: "figma-img-5", name: "图片5", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 1157, y: 0, width: 284, height: 160 },
+  { id: "figma-img-6", name: "图片6", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 11, y: 162, width: 284, height: 506 },
+  { id: "figma-img-7", name: "图片7", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 1157, y: 162, width: 284, height: 284 },
+  { id: "figma-img-8", name: "图片8", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 297, y: 429, width: 284, height: 427 },
+  { id: "figma-img-9", name: "图片9", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 584, y: 429, width: 284, height: 427 },
+  { id: "figma-img-10", name: "图片10", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 1157, y: 448, width: 284, height: 160 },
+  { id: "figma-img-11", name: "图片11", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 870, y: 508, width: 284, height: 506 },
+  { id: "figma-img-12", name: "图片12", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 1157, y: 610, width: 284, height: 506 },
+  { id: "figma-img-13", name: "图片13", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 11, y: 670, width: 284, height: 506 },
+  { id: "figma-img-14", name: "图片14", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 297, y: 858, width: 284, height: 506 },
+  { id: "figma-img-15", name: "图片15", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 584, y: 858, width: 284, height: 506 },
+  { id: "figma-img-16", name: "图片16", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 870, y: 1015, width: 284, height: 213 },
+  { id: "figma-img-17", name: "图片17", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 1157, y: 1118, width: 284, height: 506 },
+  { id: "figma-img-18", name: "图片18", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 11, y: 1177, width: 284, height: 190 },
+  { id: "figma-img-19", name: "图片19", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 870, y: 1231, width: 284, height: 506 },
+  { id: "figma-img-20", name: "图片20", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 297, y: 1365, width: 284, height: 160 },
+  { id: "figma-img-21", name: "图片21", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 584, y: 1366, width: 284, height: 284 },
+  { id: "figma-img-22", name: "图片22", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 11, y: 1369, width: 284, height: 379 },
+  { id: "figma-img-23", name: "图片23", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 297, y: 1527, width: 284, height: 506 },
+  { id: "figma-img-24", name: "图片24", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 1157, y: 1626, width: 284, height: 506 },
+  { id: "figma-img-25", name: "图片25", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 584, y: 1652, width: 284, height: 506 },
+  { id: "figma-img-26", name: "图片26", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 870, y: 1738, width: 284, height: 284 },
+  { id: "figma-img-27", name: "图片27", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 11, y: 1750, width: 284, height: 506 },
+  { id: "figma-img-28", name: "图片28", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 870, y: 2025, width: 284, height: 506 },
+  { id: "figma-img-29", name: "图片29", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 297, y: 2035, width: 284, height: 284 },
+  { id: "figma-img-30", name: "图片30", image: "/figma-designs/generated-design.png", category: "头像", prompt: "professional portrait, high quality headshot", x: 1157, y: 2133, width: 284, height: 427 }
+];
 
-  if (isLoading) return null
-  if (error || !data?.jobs?.length) return null
+// 主设计稿尺寸
+const MAIN_FRAME_SIZE = { width: 1452, height: 2561 };
+
+export default function GeneratePage() {
+  const [selectedTemplate, setSelectedTemplate] = useState<FigmaTemplate | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<File | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string>("openai");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [currentJobId, setCurrentJobId] = useState<string>("");
+  const [showModal, setShowModal] = useState(false);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
+
+  const handleTemplateClick = (template: FigmaTemplate) => {
+    setSelectedTemplate(template);
+    setShowUploadDialog(true);
+  };
+
+  const handleGenerate = async () => {
+    if (!selectedTemplate || !uploadedImage) {
+      alert("请选择模板和上传人像照片");
+      return;
+    }
+
+    setIsGenerating(true);
+    setShowUploadDialog(false);
+    
+    try {
+      // 构建生成提示，结合模板和用户上传的图片
+      const enhancedPrompt = `${selectedTemplate.prompt}, based on uploaded portrait, maintain facial features and identity, high quality, professional result`;
+      
+      const response = await fetch("/api/jobs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider: selectedProvider,
+          type: "image",
+          prompt: enhancedPrompt,
+          template_id: selectedTemplate.id,
+          template_name: selectedTemplate.name,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentJobId(data.id);
+        setShowModal(true);
+      } else {
+        const error = await response.json();
+        alert(`生成失败: ${error.error}`);
+      }
+    } catch (error) {
+      console.error("Generation failed:", error);
+      alert("网络错误，请稍后重试");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const canGenerate = selectedTemplate && uploadedImage && !isGenerating;
 
   return (
-    <div className="mt-12">
-      <h2 className="text-2xl font-semibold mb-6">Recent Generations</h2>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        {data.jobs
-          .filter((job: any) => job.status === 'done' && job.result_url)
-          .slice(0, 6)
-          .map((job: any) => (
-            <div key={job.id} className="group relative overflow-hidden rounded-lg bg-zinc-800/50 border border-zinc-700">
-              <img
-                src={job.result_url}
-                alt={job.prompt}
-                className="w-full h-48 object-cover"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity p-4 flex flex-col justify-end">
-                <p className="text-xs text-zinc-300 line-clamp-2">{job.prompt}</p>
-                <p className="text-xs text-zinc-500 mt-1">{job.provider}</p>
+    <div className="container mx-auto px-4 py-6">
+        {/* 页面标题 */}
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            创建你的AI头像
+          </h1>
+          <p className="text-gray-600 max-w-xl mx-auto">
+            精选高质量模板，一键生成专业头像作品
+          </p>
+        </div>
+
+        {/* 您的 Figma 设计稿 - 真实图片区域 */}
+        <div className="w-full flex justify-center mb-8">
+          <div className="relative max-w-[1452px] w-full">
+            {/* 您的 Figma 设计稿作为背景 */}
+            <img 
+              src="/figma-designs/generated-design.png" 
+              alt="Monna AI 设计稿" 
+              className="w-full h-auto object-contain"
+              style={{ aspectRatio: `${MAIN_FRAME_SIZE.width}/${MAIN_FRAME_SIZE.height}` }}
+            />
+            
+            {/* 每张图片的可点击区域 - 使用真实坐标 */}
+            {FIGMA_IMAGE_AREAS.map((imageArea) => (
+              <button
+                key={imageArea.id}
+                onClick={() => handleTemplateClick(imageArea)}
+                className="absolute bg-transparent hover:bg-blue-500/20 border-2 border-transparent hover:border-blue-500 transition-all duration-200 rounded group"
+                style={{
+                  left: `${(imageArea.x / MAIN_FRAME_SIZE.width) * 100}%`,
+                  top: `${(imageArea.y / MAIN_FRAME_SIZE.height) * 100}%`,
+                  width: `${(imageArea.width / MAIN_FRAME_SIZE.width) * 100}%`,
+                  height: `${(imageArea.height / MAIN_FRAME_SIZE.height) * 100}%`,
+                }}
+                title="点击选择此模板"
+              >
+                {/* 悬停时显示点击提示 */}
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-blue-500/10 rounded">
+                  <div className="bg-white/90 backdrop-blur-sm rounded px-2 py-1 text-xs font-medium text-gray-900">
+                    点击选择
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+      {/* 上传照片弹窗 */}
+      <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between">
+              {selectedTemplate?.name}
+              <Button
+                variant="ghost" 
+                size="sm"
+                onClick={() => setShowUploadDialog(false)}
+                className="h-6 w-6 p-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </DialogTitle>
+            <DialogDescription>
+              上传您的人像照片，AI将基于选择的模板风格生成头像
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            {/* 模板预览 */}
+            {selectedTemplate && (
+              <div className="text-center">
+                <p className="text-sm text-gray-600 mb-2">选中模板：{selectedTemplate.category}</p>
               </div>
+            )}
+            
+            {/* 图片上传 */}
+            <div>
+              <ImageUpload
+                onImageSelect={setUploadedImage}
+                selectedImage={uploadedImage}
+              />
             </div>
-          ))}
-      </div>
+
+            {/* AI 引擎选择 */}
+            <div>
+              <label className="text-sm font-medium mb-2 block">
+                选择 AI 引擎
+              </label>
+              <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai">OpenAI DALL-E 3</SelectItem>
+                  <SelectItem value="ideogram">Ideogram 3.0</SelectItem>
+                  <SelectItem value="gemini" disabled>
+                    Gemini (即将推出)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* 生成按钮 */}
+            <Button
+              onClick={handleGenerate}
+              disabled={!canGenerate}
+              className="w-full"
+              size="lg"
+            >
+              {isGenerating ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                  生成中...
+                </>
+              ) : (
+                "开始生成头像"
+              )}
+            </Button>
+
+            {!canGenerate && !isGenerating && (
+              <p className="text-sm text-gray-500 text-center">
+                {!uploadedImage && "请先上传人像照片"}
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 生成进度弹窗 */}
+      <GenerationModal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        jobId={currentJobId}
+        templateName={selectedTemplate?.name}
+      />
     </div>
-  )
+  );
 }
