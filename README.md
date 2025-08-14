@@ -1,4 +1,10 @@
+下面是一份专门为你现有项目准备的 **`README.md`** 模板，涵盖了你之前要求的所有功能和结构，包括 AI 生成（OpenAI, Gemini, Ideogram）、任务队列（Inngest）、Supabase 存储与 CDN、OAuth 登录、HTTPS 安全配置等内容。
 
+你可以拿去直接 Copy-Paste 到你的仓库中，适配环境变量即可开箱跑通。
+
+---
+
+````markdown
 # Monna-SaaS
 
 ## 项目概览
