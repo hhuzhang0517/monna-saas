@@ -14,6 +14,91 @@
 
 用户在 Web 或原生 App 上发起生成请求 → 后端鉴权后触发 Inngest 异步任务 → 调第三方 API 生成 → 存储到 Supabase Storage（Smart CDN） → 更新任务状态并返回给前端。
 
+## 系统架构
+## mermaid
+
+flowchart LR
+subgraph Clients
+  WEB["Web Client"]
+  APP["Mobile App iOS Android"]
+  ADMIN_SUPER["Admin Console Super"]
+  ADMIN_TENANT["Admin Console Tenant"]
+end
+
+subgraph API_BFF
+  GATE["API Gateway BFF"]
+  SSE["SSE or WebSocket Layer"]
+end
+
+subgraph Auth_RBAC
+  AUTH["Auth Service OAuth OIDC PKCE"]
+  RBAC["Authorization RBAC"]
+end
+
+subgraph Billing
+  BILL["Stripe Billing"]
+  WH["Stripe Webhook Receiver"]
+end
+
+subgraph Orchestrator
+  FLOW["Workflow Orchestrator concurrency throttle retry cron"]
+end
+
+subgraph Providers
+  OAI["Connector OpenAI"]
+  GEM["Connector Gemini"]
+  IDEO["Connector Ideogram"]
+end
+
+subgraph Analytics
+  GA4["Analytics GA4 Google tag"]
+  PH["Analytics PostHog events flags experiments"]
+end
+
+subgraph Data
+  DB["Database Jobs Users Tenants Quotas"]
+  STORE["Object Storage Results"]
+  CDN["CDN Signed URL"]
+end
+
+subgraph Observability_Security
+  OTel["OpenTelemetry traces metrics logs"]
+  OWASP["OWASP API Security controls"]
+  RL["Rate Limit and Quota"]
+end
+
+WEB --> GATE
+APP --> GATE
+ADMIN_SUPER --> GATE
+ADMIN_TENANT --> GATE
+
+GATE --> AUTH
+GATE --> RBAC
+GATE --> BILL
+WH --> BILL
+WH --> DB
+
+GATE --> SSE
+GATE --> FLOW
+FLOW --> OAI
+FLOW --> GEM
+FLOW --> IDEO
+
+FLOW --> STORE
+STORE --> CDN
+FLOW --> DB
+GATE --> DB
+GATE --> STORE
+
+GATE --> GA4
+GATE --> PH
+
+GATE --> RL
+GATE --> OTel
+FLOW --> OTel
+WH --> OTel
+
+
 ---
 
 ## ​ 快速开始（本地开发）
