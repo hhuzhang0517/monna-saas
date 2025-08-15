@@ -1,0 +1,563 @@
+openapi: 3.1.0
+info:
+  title: Monna AI Gen SaaS API
+  version: 0.2.0
+  description: >
+    Unified API for Web and Native Apps. Includes Admin Console (Super Admin / Tenant Admin),
+    Billing, Jobs, Uploads, Analytics proxy, and Webhooks.
+
+servers:
+  - url: https://api.your-domain.com
+    description: Production
+  - url: https://staging-api.your-domain.com
+    description: Staging
+
+security:
+  - bearerAuth: []   # JWT with role claims (super_admin, tenant_admin, member)
+
+x-idempotency:
+  header: Idempotency-Key
+
+tags:
+  - name: me
+  - name: auth
+  - name: billing
+  - name: jobs
+  - name: uploads
+  - name: analytics
+  - name: admin
+  - name: webhooks
+  - name: health
+
+paths:
+  /api/me:
+    get:
+      tags: [me]
+      summary: Get current user profile and subscription state
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserMe" }
+        "401": { description: Unauthorized }
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out current session
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: No Content }
+        "401": { description: Unauthorized }
+
+  /api/billing/checkout:
+    post:
+      tags: [billing]
+      summary: Create Stripe Checkout or Portal URL for web subscriptions
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: URL created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, format: uri }
+
+  /api/billing/payment-intent:
+    post:
+      tags: [billing]
+      summary: Create PaymentIntent for mobile wallets (PaymentSheet Apple Pay Google Pay)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount: { type: integer, minimum: 1 }
+                currency: { type: string, example: "usd" }
+                metadata: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Client secret for PaymentSheet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client_secret: { type: string }
+
+  /api/jobs:
+    post:
+      tags: [jobs]
+      summary: Create AI generation job
+      description: Idempotent creation with Idempotency-Key header
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateJobRequest" }
+      responses:
+        "202":
+          description: Accepted and queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "402": { description: Payment required or quota exceeded }
+        "429": { description: Rate limited }
+
+    get:
+      tags: [jobs]
+      summary: List my jobs
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - in: query
+          name: cursor
+          schema: { type: string, nullable: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Job" }
+                  next_cursor: { type: string, nullable: true }
+
+  /api/jobs/{id}:
+    get:
+      tags: [jobs]
+      summary: Get job by ID
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { description: Not Found }
+
+    delete:
+      tags: [jobs]
+      summary: Cancel a queued or processing job
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "202": { description: Cancel accepted }
+        "409": { description: Cannot cancel }
+
+  /api/uploads:
+    post:
+      tags: [uploads]
+      summary: Get a signed upload policy or URL for direct-to-storage uploads
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename: { type: string }
+                content_type: { type: string }
+      responses:
+        "200":
+          description: Signed upload details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_url: { type: string, format: uri }
+                  headers: { type: object, additionalProperties: true }
+                  expires_in: { type: integer }
+
+  /api/analytics/events:
+    post:
+      tags: [analytics]
+      summary: Optional analytics proxy to GA4 or PostHog
+      description: >
+        Server-side proxy for analytics events to protect keys and enrich context.
+        For GA4 use Measurement Protocol. For PostHog use server ingestion API.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "202": { description: Accepted }
+
+  /api/admin/users:
+    get:
+      tags: [admin]
+      summary: List users (super admin)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUser" }
+
+  /api/admin/users/{id}:
+    patch:
+      tags: [admin]
+      summary: Update user role or status (super admin)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [super_admin, tenant_admin, member] }
+                active: { type: boolean }
+      responses:
+        "200": { description: Updated }
+
+  /api/admin/tenants:
+    get:
+      tags: [admin]
+      summary: List tenants (super admin)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Tenant" }
+
+    post:
+      tags: [admin]
+      summary: Create tenant (super admin)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TenantCreate" }
+      responses:
+        "201": { description: Created }
+
+  /api/admin/tenants/{id}:
+    get:
+      tags: [admin]
+      summary: Get tenant by ID (super or tenant admin)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tenant" }
+
+    patch:
+      tags: [admin]
+      summary: Update tenant settings or quotas
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200": { description: Updated }
+
+    delete:
+      tags: [admin]
+      summary: Delete tenant (super admin)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: Deleted }
+
+  /api/admin/jobs/search:
+    get:
+      tags: [admin]
+      summary: Search jobs by tenant, user, provider, status, time window
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: tenant_id
+          schema: { type: string, nullable: true }
+        - in: query
+          name: user_id
+          schema: { type: string, nullable: true }
+        - in: query
+          name: provider
+          schema: { type: string, nullable: true }
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [queued, processing, done, failed]
+        - in: query
+          name: from
+          schema: { type: string, format: date-time, nullable: true }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time, nullable: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Job" }
+
+  /api/admin/jobs/{id}/retry:
+    post:
+      tags: [admin]
+      summary: Retry a failed job
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "202": { description: Retry accepted }
+
+  /api/admin/feature-flags:
+    get:
+      tags: [admin]
+      summary: List feature flags (can map to PostHog or internal store)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    post:
+      tags: [admin]
+      summary: Upsert feature flag
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200": { description: Updated }
+
+  /api/admin/reports/usage:
+    get:
+      tags: [admin]
+      summary: Aggregated usage and revenue metrics dashboard
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: tenant_id
+          schema: { type: string, nullable: true }
+        - in: query
+          name: range
+          schema: { type: string, example: "last_30d" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/events:
+    get:
+      tags: [jobs]
+      summary: Stream job progress via SSE
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: text/event-stream }
+
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness readiness probe
+      responses:
+        "200": { description: OK }
+
+webhooks:
+  stripeEvent:
+    post:
+      summary: Stripe webhook receiver
+      description: >
+        Verify Stripe-Signature, handle retries, update billing state idempotently.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StripeEvent" }
+      responses:
+        "200": { description: Acknowledge processed }
+        "400": { description: Signature verification failed }
+        "409": { description: Duplicate }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    UserMe:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [super_admin, tenant_admin, member] }
+        tenant_id: { type: string, nullable: true }
+        subscription:
+          type: object
+          properties:
+            plan: { type: string }
+            status: { type: string, enum: [active, past_due, canceled, none] }
+            renews_at: { type: string, format: date-time, nullable: true }
+
+    CreateJobRequest:
+      type: object
+      required: [type, provider, prompt]
+      properties:
+        type:
+          type: string
+          enum: [image, video]
+        provider:
+          type: string
+          enum: [openai, gemini, ideogram]
+        prompt:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
+        callback_url:
+          type: string
+          format: uri
+          nullable: true
+
+    Job:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, nullable: true }
+        user_id: { type: string }
+        provider: { type: string }
+        type: { type: string }
+        prompt: { type: string }
+        status:
+          type: string
+          enum: [queued, processing, done, failed]
+        result_url:
+          type: string
+          format: uri
+          nullable: true
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        error:
+          type: object
+          nullable: true
+          properties:
+            code: { type: string }
+            message: { type: string }
+
+    AdminUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [super_admin, tenant_admin, member] }
+        active: { type: boolean }
+
+    Tenant:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        plan: { type: string }
+        quotas:
+          type: object
+          additionalProperties: true
+
+    TenantCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        plan: { type: string }
+        quotas:
+          type: object
+          additionalProperties: true
+
+    StripeEvent:
+      type: object
+      additionalProperties: true
