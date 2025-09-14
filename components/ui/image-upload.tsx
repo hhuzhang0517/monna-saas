@@ -74,23 +74,33 @@ export function ImageUpload({ onImageSelect, selectedImage, className }: ImageUp
         />
 
         {selectedImage ? (
-          <div className="relative">
-            <img
-              src={URL.createObjectURL(selectedImage)}
-              alt="Selected"
-              className="w-full h-48 object-cover rounded-lg"
-            />
-            <Button
-              size="sm"
-              variant="destructive"
-              className="absolute top-2 right-2"
-              onClick={(e) => {
-                e.stopPropagation();
-                onImageSelect(null as any);
-              }}
-            >
-              <X className="h-4 w-4" />
-            </Button>
+          <div className="flex items-center space-x-4">
+            <div className="relative">
+              <img
+                src={URL.createObjectURL(selectedImage)}
+                alt="Selected"
+                className="w-24 h-24 object-cover rounded-lg"
+              />
+              <Button
+                size="sm"
+                variant="destructive"
+                className="absolute -top-2 -right-2 w-6 h-6 p-0"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onImageSelect(null as any);
+                }}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-gray-900 truncate">
+                {selectedImage.name}
+              </p>
+              <p className="text-xs text-gray-500">
+                {(selectedImage.size / 1024).toFixed(1)} KB
+              </p>
+            </div>
           </div>
         ) : (
           <div className="text-center">

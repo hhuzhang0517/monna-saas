@@ -5,7 +5,7 @@ export const cleanupJobs = inngest.createFunction(
   { id: "cleanup-jobs" }, 
   { cron: "0 * * * *" },
   async () => {
-    const supabase = createSupabaseServer();
+    const supabase = await createSupabaseServer();
     
     // 清理超过24小时的失败任务
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
