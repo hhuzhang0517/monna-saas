@@ -5,14 +5,15 @@ import {
   text,
   timestamp,
   integer,
+  uuid,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
+  auth_id: uuid('auth_id').unique(),
   name: varchar('name', { length: 100 }),
   email: varchar('email', { length: 255 }).notNull().unique(),
-  passwordHash: text('password_hash').notNull(),
   role: varchar('role', { length: 20 }).notNull().default('member'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -66,6 +67,20 @@ export const invitations = pgTable('invitations', {
     .references(() => users.id),
   invitedAt: timestamp('invited_at').notNull().defaultNow(),
   status: varchar('status', { length: 20 }).notNull().default('pending'),
+});
+
+export const jobs = pgTable('jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull(),
+  provider: varchar('provider', { length: 20 }).notNull(),
+  type: varchar('type', { length: 20 }).notNull().default('image'), // 'image', 'video', 'longvideo'
+  prompt: text('prompt').notNull(),
+  referenceImageUrl: text('reference_image_url'), // URL to reference image for Image2Image generation
+  status: varchar('status', { length: 20 }).notNull().default('queued'),
+  resultUrl: text('result_url'),
+  metadata: text('metadata'), // JSON字段，存储长视频进度等元数据
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const teamsRelations = relations(teams, ({ many }) => ({
@@ -122,6 +137,8 @@ export type ActivityLog = typeof activityLogs.$inferSelect;
 export type NewActivityLog = typeof activityLogs.$inferInsert;
 export type Invitation = typeof invitations.$inferSelect;
 export type NewInvitation = typeof invitations.$inferInsert;
+export type Job = typeof jobs.$inferSelect;
+export type NewJob = typeof jobs.$inferInsert;
 export type TeamDataWithMembers = Team & {
   teamMembers: (TeamMember & {
     user: Pick<User, 'id' | 'name' | 'email'>;

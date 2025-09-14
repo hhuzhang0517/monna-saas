@@ -11,5 +11,5 @@ if (!process.env.POSTGRES_URL) {
   process.env.POSTGRES_URL = 'postgresql://placeholder:placeholder@localhost:5432/placeholder';
 }
 
-export const client = postgres(process.env.POSTGRES_URL);
+export const client = postgres(process.env.POSTGRES_URL, { ssl: 'require', prepare: false });
 export const db = drizzle(client, { schema });

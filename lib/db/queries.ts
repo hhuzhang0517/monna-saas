@@ -1,32 +1,20 @@
 import { desc, and, eq, isNull } from 'drizzle-orm';
 import { db } from './drizzle';
 import { activityLogs, teamMembers, teams, users } from './schema';
-import { cookies } from 'next/headers';
-import { verifyToken } from '@/lib/auth/session';
+import { createSupabaseServer } from '@/lib/supabase/server';
 
 export async function getUser() {
-  const sessionCookie = (await cookies()).get('session');
-  if (!sessionCookie || !sessionCookie.value) {
-    return null;
-  }
+  const supabase = await createSupabaseServer();
+  const { data, error } = await supabase.auth.getUser();
 
-  const sessionData = await verifyToken(sessionCookie.value);
-  if (
-    !sessionData ||
-    !sessionData.user ||
-    typeof sessionData.user.id !== 'number'
-  ) {
-    return null;
-  }
-
-  if (new Date(sessionData.expires) < new Date()) {
+  if (error || !data.user) {
     return null;
   }
 
   const user = await db
     .select()
     .from(users)
-    .where(and(eq(users.id, sessionData.user.id), isNull(users.deletedAt)))
+    .where(and(eq(users.auth_id, data.user.id), isNull(users.deletedAt)))
     .limit(1);
 
   if (user.length === 0) {
@@ -127,4 +115,45 @@ export async function getTeamForUser() {
   });
 
   return result?.team || null;
+}
+
+export async function createUserTeam(user: typeof users.$inferSelect) {
+  // Create a team for the user
+  const [team] = await db
+    .insert(teams)
+    .values({
+      name: `${user.email}'s Team`,
+    })
+    .returning();
+
+  // Add user to the team as owner
+  await db.insert(teamMembers).values({
+    teamId: team.id,
+    userId: user.id,
+    role: 'owner',
+  });
+
+  // Return the team with the expected structure
+  const result = await db.query.teamMembers.findFirst({
+    where: eq(teamMembers.userId, user.id),
+    with: {
+      team: {
+        with: {
+          teamMembers: {
+            with: {
+              user: {
+                columns: {
+                  id: true,
+                  name: true,
+                  email: true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  return result!.team;
 }

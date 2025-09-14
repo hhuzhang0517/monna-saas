@@ -65,9 +65,11 @@ export function withTeam<T>(action: ActionWithTeamFunction<T>) {
       redirect('/sign-in');
     }
 
-    const team = await getTeamForUser();
+    let team = await getTeamForUser();
     if (!team) {
-      throw new Error('Team not found');
+      // Auto-create a team for the user if they don't have one
+      const { createUserTeam } = await import('@/lib/db/queries');
+      team = await createUserTeam(user);
     }
 
     return action(formData, team);
