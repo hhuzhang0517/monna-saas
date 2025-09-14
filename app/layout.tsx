@@ -1,19 +1,16 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
-import { Manrope } from 'next/font/google';
-import { getUser, getTeamForUser } from '@/lib/db/queries';
-import { SWRConfig } from 'swr';
+import { AuthProvider } from '@/lib/contexts/auth-context';
+import { LanguageProvider } from '@/lib/contexts/language-context';
 
 export const metadata: Metadata = {
-  title: 'Next.js SaaS Starter',
-  description: 'Get started quickly with Next.js, Postgres, and Stripe.'
+  title: 'Monna AI - AI头像生成平台',
+  description: 'AI驱动的专业头像和图像生成平台，创建高质量个人头像。'
 };
 
 export const viewport: Viewport = {
   maximumScale: 1
 };
-
-const manrope = Manrope({ subsets: ['latin'] });
 
 export default function RootLayout({
   children
@@ -22,22 +19,14 @@ export default function RootLayout({
 }) {
   return (
     <html
-      lang="en"
-      className={`bg-white dark:bg-gray-950 text-black dark:text-white ${manrope.className}`}
-    >
-      <body className="min-h-[100dvh] bg-gray-50">
-        <SWRConfig
-          value={{
-            fallback: {
-              // We do NOT await here
-              // Only components that read this data will suspend
-              '/api/user': getUser(),
-              '/api/team': getTeamForUser()
-            }
-          }}
-        >
-          {children}
-        </SWRConfig>
+      lang="zh"
+      className="bg-white dark:bg-gray-950 text-black dark:text-white">
+      <body className="min-h-[100dvh] bg-gray-50 font-sans">
+        <LanguageProvider>
+          <AuthProvider>
+            {children}
+          </AuthProvider>
+        </LanguageProvider>
       </body>
     </html>
   );

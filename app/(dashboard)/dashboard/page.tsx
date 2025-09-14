@@ -18,7 +18,7 @@ import { Suspense } from 'react';
 import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
-import { Loader2, PlusCircle } from 'lucide-react';
+import { Loader2, PlusCircle, Download, Image, Video, Trash2 } from 'lucide-react';
 
 type ActionState = {
   error?: string;
@@ -26,6 +26,14 @@ type ActionState = {
 };
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+interface Generation {
+  id: string;
+  type: 'image' | 'video';
+  prompt: string;
+  result_url: string;
+  created_at: string;
+}
 
 function SubscriptionSkeleton() {
   return (
@@ -177,6 +185,148 @@ function TeamMembers() {
   );
 }
 
+function GenerationHistorySkeleton() {
+  return (
+    <Card className="mb-8 h-[300px]">
+      <CardHeader>
+        <CardTitle>生成历史</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="animate-pulse space-y-4">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center space-x-4">
+              <div className="size-16 bg-gray-200 rounded"></div>
+              <div className="flex-1 space-y-2">
+                <div className="h-4 w-3/4 bg-gray-200 rounded"></div>
+                <div className="h-3 w-1/2 bg-gray-200 rounded"></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function GenerationHistory() {
+  const { data: generations, mutate } = useSWR<Generation[]>('/api/user/generations', fetcher);
+  
+  const handleDownload = async (url: string, filename: string) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      console.error('Download failed:', error);
+    }
+  };
+
+  const handleCleanup = async () => {
+    try {
+      const response = await fetch('/api/user/generations', {
+        method: 'DELETE'
+      });
+      if (response.ok) {
+        mutate(); // 重新获取数据
+        const result = await response.json();
+        alert(`清理完成: 删除了 ${result.deleted} 条记录`);
+      }
+    } catch (error) {
+      console.error('Cleanup failed:', error);
+      alert('清理失败，请重试');
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleString('zh-CN');
+  };
+
+  const truncatePrompt = (prompt: string, maxLength: number = 60) => {
+    return prompt.length > maxLength ? `${prompt.substring(0, maxLength)}...` : prompt;
+  };
+
+  return (
+    <Card className="mb-8">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle>生成历史</CardTitle>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={handleCleanup}
+            className="text-red-600 hover:text-red-700"
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            清理旧记录
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {!generations?.length ? (
+          <p className="text-muted-foreground">还没有生成历史。</p>
+        ) : (
+          <div className="space-y-4">
+            {generations.map((gen) => (
+              <div key={gen.id} className="flex items-start space-x-4 p-4 border rounded-lg">
+                <div className="flex-shrink-0">
+                  {gen.type === 'image' ? (
+                    <img 
+                      src={gen.result_url} 
+                      alt="Generated" 
+                      className="w-16 h-16 object-cover rounded"
+                    />
+                  ) : (
+                    <video 
+                      src={gen.result_url} 
+                      className="w-16 h-16 object-cover rounded"
+                      muted
+                    />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center space-x-2 mb-2">
+                    {gen.type === 'image' ? (
+                      <Image className="h-4 w-4 text-gray-500" />
+                    ) : (
+                      <Video className="h-4 w-4 text-gray-500" />
+                    )}
+                    <span className="text-sm font-medium">
+                      {gen.type === 'image' ? '图片生成' : '视频生成'}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-600 mb-2">
+                    {truncatePrompt(gen.prompt)}
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    {formatDate(gen.created_at)}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleDownload(
+                    gen.result_url,
+                    `monna-${gen.type}-${gen.id.slice(0, 8)}.${gen.type === 'image' ? 'png' : 'mp4'}`
+                  )}
+                >
+                  <Download className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function InviteTeamMemberSkeleton() {
   return (
     <Card className="h-[260px]">
@@ -275,6 +425,9 @@ export default function SettingsPage() {
       <h1 className="text-lg lg:text-2xl font-medium mb-6">Team Settings</h1>
       <Suspense fallback={<SubscriptionSkeleton />}>
         <ManageSubscription />
+      </Suspense>
+      <Suspense fallback={<GenerationHistorySkeleton />}>
+        <GenerationHistory />
       </Suspense>
       <Suspense fallback={<TeamMembersSkeleton />}>
         <TeamMembers />

@@ -16,9 +16,9 @@ import {
   ActivityType,
   invitations
 } from '@/lib/db/schema';
-import { comparePasswords, hashPassword, setSession } from '@/lib/auth/session';
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
+import { createSupabaseServer } from '@/lib/supabase/server';
 import { createCheckoutSession } from '@/lib/payments/stripe';
 import { getUser, getUserWithTeam } from '@/lib/db/queries';
 import {
@@ -51,6 +51,46 @@ const signInSchema = z.object({
 
 export const signIn = validatedAction(signInSchema, async (data, formData) => {
   const { email, password } = data;
+  const supabase = await createSupabaseServer();
+
+  // 首先检查用户是否已经登录
+  const { data: { user: currentUser } } = await supabase.auth.getUser();
+  if (currentUser) {
+    console.log('User already logged in:', currentUser.email);
+    const redirectTo = formData.get('redirect') as string | null;
+    const finalRedirect = redirectTo && redirectTo !== 'checkout' ? decodeURIComponent(redirectTo) : '/generate';
+    redirect(finalRedirect);
+    return; // 添加return防止继续执行
+  }
+
+  const { error } = await supabase.auth.signInWithPassword({
+    email,
+    password
+  });
+
+  if (error) {
+    console.error('Sign in error:', error);
+    let errorMessage = 'Invalid email or password. Please try again.';
+    
+    // Check both error code and message for email confirmation
+    const isEmailNotConfirmed = error.code === 'email_not_confirmed' || 
+                               error.message.includes('Email not confirmed');
+    
+    if (isEmailNotConfirmed) {
+      errorMessage = 'Your email address has not been confirmed yet. Please check your email and click the confirmation link, or click the link below to resend the confirmation email.';
+    } else if (error.message.includes('Invalid login credentials')) {
+      errorMessage = 'Invalid email or password. Please try again.';
+    } else if (error.message.includes('too_many_requests')) {
+      errorMessage = 'Too many login attempts. Please wait a moment before trying again.';
+    }
+    
+    return {
+      error: errorMessage,
+      email,
+      password,
+      showResendConfirmation: isEmailNotConfirmed
+    };
+  }
 
   const userWithTeam = await db
     .select({
@@ -63,41 +103,21 @@ export const signIn = validatedAction(signInSchema, async (data, formData) => {
     .where(eq(users.email, email))
     .limit(1);
 
-  if (userWithTeam.length === 0) {
-    return {
-      error: 'Invalid email or password. Please try again.',
-      email,
-      password
-    };
+  if (userWithTeam.length > 0) {
+    const { user: foundUser, team: foundTeam } = userWithTeam[0];
+    await logActivity(foundTeam?.id, foundUser.id, ActivityType.SIGN_IN);
   }
-
-  const { user: foundUser, team: foundTeam } = userWithTeam[0];
-
-  const isPasswordValid = await comparePasswords(
-    password,
-    foundUser.passwordHash
-  );
-
-  if (!isPasswordValid) {
-    return {
-      error: 'Invalid email or password. Please try again.',
-      email,
-      password
-    };
-  }
-
-  await Promise.all([
-    setSession(foundUser),
-    logActivity(foundTeam?.id, foundUser.id, ActivityType.SIGN_IN)
-  ]);
 
   const redirectTo = formData.get('redirect') as string | null;
   if (redirectTo === 'checkout') {
     const priceId = formData.get('priceId') as string;
-    return createCheckoutSession({ team: foundTeam, priceId });
+    const team = userWithTeam.length > 0 ? userWithTeam[0].team : undefined;
+    return createCheckoutSession({ team, priceId });
   }
 
-  redirect('/dashboard');
+  // 如果有重定向URL，使用它；否则默认跳转到generate
+  const finalRedirect = redirectTo && redirectTo !== 'checkout' ? decodeURIComponent(redirectTo) : '/generate';
+  redirect(finalRedirect);
 });
 
 const signUpSchema = z.object({
@@ -108,30 +128,88 @@ const signUpSchema = z.object({
 
 export const signUp = validatedAction(signUpSchema, async (data, formData) => {
   const { email, password, inviteId } = data;
+  const supabase = await createSupabaseServer();
 
-  const existingUser = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, email))
-    .limit(1);
+  console.log('Attempting signup for:', email);
+  console.log('Email redirect URL:', `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`);
+  
+  const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`
+    }
+  });
+  
+  console.log('Signup response data:', signUpData);
+  console.log('Signup response error:', signUpError);
 
-  if (existingUser.length > 0) {
+  if (signUpError || !signUpData.user) {
+    console.error('Sign up error:', signUpError);
+    let errorMessage = 'Failed to create user. Please try again.';
+    
+    if (signUpError?.message.includes('already registered')) {
+      errorMessage = 'An account with this email already exists. Please sign in instead.';
+    }
+    
+    return {
+      error: errorMessage,
+      email,
+      password
+    };
+  }
+
+  // Debug: Log the actual signUp response to understand Supabase behavior
+  console.log('SignUp response:', {
+    hasSession: !!signUpData.session,
+    userEmailConfirmed: signUpData.user.email_confirmed_at,
+    userEmail: signUpData.user.email,
+    userCreatedAt: signUpData.user.created_at,
+    userConfirmedAt: signUpData.user.confirmed_at
+  });
+
+  // ALWAYS require email confirmation for new signups
+  // Don't proceed with database operations for new users
+  console.log('New user registration - requiring email confirmation for:', email);
+  
+  // Important: Sign out immediately to prevent auto-login
+  // This ensures user is not logged in until email is confirmed
+  await supabase.auth.signOut();
+  console.log('Signed out user to require email confirmation');
+  
+  return {
+    success: 'Please check your email and click the confirmation link to complete your registration.',
+    email,
+    requiresConfirmation: true
+  };
+
+  // NOTE: The following code is kept but will never be reached during normal signup flow
+  // It's only executed when users are already confirmed (which shouldn't happen in signUp action)
+  console.log('User already confirmed, creating database records for:', email);
+
+  const newUser: NewUser = {
+    email,
+    auth_id: signUpData.user.id,
+    role: 'owner' // Default role, will be overridden if there's an invitation
+  };
+
+  let createdUser;
+  try {
+    [createdUser] = await db.insert(users).values(newUser).returning();
+  } catch (error: any) {
+    if (error.code === '23505' && error.constraint_name === 'users_email_unique') {
+      return {
+        error: 'An account with this email already exists. Please sign in instead.',
+        email,
+        password
+      };
+    }
     return {
       error: 'Failed to create user. Please try again.',
       email,
       password
     };
   }
-
-  const passwordHash = await hashPassword(password);
-
-  const newUser: NewUser = {
-    email,
-    passwordHash,
-    role: 'owner' // Default role, will be overridden if there's an invitation
-  };
-
-  const [createdUser] = await db.insert(users).values(newUser).returning();
 
   if (!createdUser) {
     return {
@@ -208,8 +286,7 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
 
   await Promise.all([
     db.insert(teamMembers).values(newTeamMember),
-    logActivity(teamId, createdUser.id, ActivityType.SIGN_UP),
-    setSession(createdUser)
+    logActivity(teamId, createdUser.id, ActivityType.SIGN_UP)
   ]);
 
   const redirectTo = formData.get('redirect') as string | null;
@@ -218,14 +295,13 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
     return createCheckoutSession({ team: createdTeam, priceId });
   }
 
-  redirect('/dashboard');
+  redirect('/generate');
 });
 
 export async function signOut() {
-  const user = (await getUser()) as User;
-  const userWithTeam = await getUserWithTeam(user.id);
-  await logActivity(userWithTeam?.teamId, user.id, ActivityType.SIGN_OUT);
-  (await cookies()).delete('session');
+  const supabase = await createSupabaseServer();
+  await supabase.auth.signOut();
+  redirect('/sign-in');
 }
 
 const updatePasswordSchema = z.object({
@@ -238,13 +314,15 @@ export const updatePassword = validatedActionWithUser(
   updatePasswordSchema,
   async (data, _, user) => {
     const { currentPassword, newPassword, confirmPassword } = data;
+    const supabase = await createSupabaseServer();
 
-    const isPasswordValid = await comparePasswords(
-      currentPassword,
-      user.passwordHash
-    );
+    // First, sign in with the current password to verify it
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword
+    });
 
-    if (!isPasswordValid) {
+    if (signInError) {
       return {
         currentPassword,
         newPassword,
@@ -271,16 +349,19 @@ export const updatePassword = validatedActionWithUser(
       };
     }
 
-    const newPasswordHash = await hashPassword(newPassword);
-    const userWithTeam = await getUserWithTeam(user.id);
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
 
-    await Promise.all([
-      db
-        .update(users)
-        .set({ passwordHash: newPasswordHash })
-        .where(eq(users.id, user.id)),
-      logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_PASSWORD)
-    ]);
+    if (updateError) {
+      return {
+        currentPassword,
+        newPassword,
+        confirmPassword,
+        error: 'Failed to update password. Please try again.'
+      };
+    }
+
+    const userWithTeam = await getUserWithTeam(user.id);
+    await logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_PASSWORD);
 
     return {
       success: 'Password updated successfully.'
@@ -296,9 +377,14 @@ export const deleteAccount = validatedActionWithUser(
   deleteAccountSchema,
   async (data, _, user) => {
     const { password } = data;
+    const supabase = await createSupabaseServer();
 
-    const isPasswordValid = await comparePasswords(password, user.passwordHash);
-    if (!isPasswordValid) {
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password
+    });
+
+    if (signInError) {
       return {
         password,
         error: 'Incorrect password. Account deletion failed.'
@@ -313,27 +399,21 @@ export const deleteAccount = validatedActionWithUser(
       ActivityType.DELETE_ACCOUNT
     );
 
-    // Soft delete
-    await db
-      .update(users)
-      .set({
-        deletedAt: sql`CURRENT_TIMESTAMP`,
-        email: sql`CONCAT(email, '-', id, '-deleted')` // Ensure email uniqueness
-      })
-      .where(eq(users.id, user.id));
+    const response = await fetch('/api/user/delete', { 
+      method: 'POST',
+      credentials: 'include'
+    });
 
-    if (userWithTeam?.teamId) {
-      await db
-        .delete(teamMembers)
-        .where(
-          and(
-            eq(teamMembers.userId, user.id),
-            eq(teamMembers.teamId, userWithTeam.teamId)
-          )
-        );
+    if (!response.ok) {
+      const { error } = await response.json();
+      return {
+        password,
+        error: error || 'Failed to delete account. Please try again.'
+      };
     }
 
-    (await cookies()).delete('session');
+    await supabase.auth.signOut();
+
     redirect('/sign-in');
   }
 );
@@ -457,3 +537,56 @@ export const inviteTeamMember = validatedActionWithUser(
     return { success: 'Invitation sent successfully' };
   }
 );
+
+export async function signInWithGoogle() {
+  const supabase = await createSupabaseServer();
+  
+  // Use localhost explicitly for development
+  const baseUrl = 'http://localhost:3005';
+  
+  console.log('🔄 Starting Google OAuth with redirect:', `${baseUrl}/auth/callback`);
+  
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: `${baseUrl}/auth/callback`,
+      queryParams: {
+        access_type: 'offline',
+        prompt: 'consent'
+      }
+    }
+  });
+
+  if (error) {
+    console.error('Google OAuth error:', error);
+    return {
+      error: 'Failed to sign in with Google. Please try again.'
+    };
+  }
+
+  console.log('🔄 Redirecting to Google OAuth URL:', data.url);
+  redirect(data.url);
+}
+
+export async function signInWithApple() {
+  const supabase = await createSupabaseServer();
+  
+  // Use localhost explicitly for development
+  const baseUrl = 'http://localhost:3005';
+  
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'apple',
+    options: {
+      redirectTo: `${baseUrl}/auth/callback`
+    }
+  });
+
+  if (error) {
+    console.error('Apple OAuth error:', error);
+    return {
+      error: 'Failed to sign in with Apple. Please try again.'
+    };
+  }
+
+  redirect(data.url);
+}
