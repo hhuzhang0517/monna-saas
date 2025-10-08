@@ -1,11 +1,12 @@
 import Stripe from 'stripe';
 import { redirect } from 'next/navigation';
-import { Team } from '@/lib/db/schema';
 import {
+  Team,
   getTeamByStripeCustomerId,
   getUser,
   updateTeamSubscription
 } from '@/lib/db/queries';
+import CreditManager from '@/lib/credits/credit-manager';
 
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-04-30.basil'
@@ -33,14 +34,12 @@ export async function createCheckoutSession({
       }
     ],
     mode: 'subscription',
-    success_url: `${process.env.BASE_URL}/api/stripe/checkout?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.BASE_URL}/pricing`,
+    success_url: `http://localhost:3005/api/stripe/checkout?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `http://localhost:3005/pricing`,
     customer: team.stripeCustomerId || undefined,
-    client_reference_id: user.id.toString(),
-    allow_promotion_codes: true,
-    subscription_data: {
-      trial_period_days: 14
-    }
+    client_reference_id: user.id,
+    allow_promotion_codes: true
+    // 移除免费试用：不再添加 subscription_data.trial_period_days
   });
 
   redirect(session.url!);
@@ -130,19 +129,41 @@ export async function handleSubscriptionChange(
 
   if (status === 'active' || status === 'trialing') {
     const plan = subscription.items.data[0]?.plan;
+    const product = await stripe.products.retrieve(plan?.product as string);
+    
+    // 从产品元数据中获取计划信息
+    const planKey = product.metadata?.plan_key || 'free';
+    
     await updateTeamSubscription(team.id, {
       stripeSubscriptionId: subscriptionId,
       stripeProductId: plan?.product as string,
-      planName: (plan?.product as Stripe.Product).name,
+      planName: planKey,
       subscriptionStatus: status
     });
+
+    // 如果是新激活的订阅，分配信用点
+    if (status === 'active') {
+      const success = await CreditManager.allocateSubscriptionCredits({
+        teamId: team.id,
+        planName: planKey,
+      });
+
+      if (!success) {
+        console.error(`Failed to allocate credits for team ${team.id} with plan ${planKey}`);
+      } else {
+        console.log(`Successfully allocated credits for team ${team.id} with plan ${planKey}`);
+      }
+    }
   } else if (status === 'canceled' || status === 'unpaid') {
+    // 订阅取消时，将计划降级为免费档
     await updateTeamSubscription(team.id, {
       stripeSubscriptionId: null,
       stripeProductId: null,
-      planName: null,
+      planName: 'free',
       subscriptionStatus: status
     });
+
+    console.log(`Subscription canceled for team ${team.id}, downgraded to free plan`);
   }
 }
 

@@ -1,28 +1,207 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { putAndGetUrl } from "@/lib/storage";
+import { putAndGetUrl, putAndGetPublicUrl } from "@/lib/storage";
+import crypto from "crypto";
 
 // 初始化Gemini客户端
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-
-export async function generateImageGemini(prompt: string) {
-  // 注意：Gemini 目前主要是文本生成，图像生成功能可能有限
-  // 这里提供一个基础实现框架，具体API可能需要根据Google最新文档调整
-  
-  // 暂时抛出错误，提醒需要根据最新的Gemini图像生成API进行实现
-  throw new Error("Gemini image generation needs to be implemented according to latest Google AI API");
-  
-  // 以下是预期的实现结构（需要根据实际API调整）:
-  /*
-  const model = genAI.getGenerativeModel({ model: "gemini-pro-vision" });
-  const result = await model.generateContent([prompt]);
-  
-  // 处理返回的图像数据
-  // const imageData = result.response.candidates[0]...
-  // const bytes = Buffer.from(imageData, "base64");
-  // const url = await putAndGetUrl(`gemini/${crypto.randomUUID()}.png`, bytes, "image/png");
-  // return { url };
-  */
+if (!process.env.GEMINI_API_KEY) {
+  throw new Error("GEMINI_API_KEY environment variable is not set");
 }
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+export async function generateImageGemini(prompt: string, referenceImageUrl?: string, referenceImageUrl2?: string) {
+  console.log("🤖 Using Gemini 2.5 Flash Image (Nano Banana) for image generation");
+  console.log("🎨 Starting Gemini image generation:", {
+    prompt,
+    hasReferenceImage: !!referenceImageUrl,
+    hasSecondReferenceImage: !!referenceImageUrl2
+  });
+
+  try {
+    // 尝试使用不同的模型进行图片生成
+    let model;
+    let modelName = "gemini-2.5-flash-image-preview";
+    
+    try {
+      model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: 0.8,
+          topP: 0.9,
+          topK: 40,
+          maxOutputTokens: 1290, // 每张图片1290 tokens
+        }
+      });
+    } catch (modelError) {
+      console.log("⚠️ Primary model failed, trying alternative model...");
+      modelName = "gemini-2.5-flash";
+      model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: 0.8,
+          topP: 0.9,
+          topK: 40,
+          maxOutputTokens: 1290,
+        }
+      });
+    }
+    
+    console.log("🔧 Model configuration:", {
+      modelName,
+      temperature: 0.8,
+      maxOutputTokens: 1290
+    });
+
+    // 构建内容数组
+    const contents: any[] = [];
+
+    // 处理参考图片
+    if (referenceImageUrl && referenceImageUrl2) {
+      // 双图片模式：处理两张参考图片进行合成
+      console.log("🖼️🖼️ Adding two reference images for anime merge/composition");
+
+      // 下载第一张图片
+      const imageResponse1 = await fetch(referenceImageUrl);
+      if (!imageResponse1.ok) {
+        throw new Error(`Failed to fetch first reference image: ${imageResponse1.statusText}`);
+      }
+
+      const imageBuffer1 = await imageResponse1.arrayBuffer();
+      const base64Image1 = Buffer.from(imageBuffer1).toString('base64');
+      const mimeType1 = imageResponse1.headers.get('content-type') || 'image/png';
+
+      contents.push({
+        inlineData: {
+          data: base64Image1,
+          mimeType: mimeType1
+        }
+      });
+
+      // 下载第二张图片
+      const imageResponse2 = await fetch(referenceImageUrl2);
+      if (!imageResponse2.ok) {
+        throw new Error(`Failed to fetch second reference image: ${imageResponse2.statusText}`);
+      }
+
+      const imageBuffer2 = await imageResponse2.arrayBuffer();
+      const base64Image2 = Buffer.from(imageBuffer2).toString('base64');
+      const mimeType2 = imageResponse2.headers.get('content-type') || 'image/png';
+
+      contents.push({
+        inlineData: {
+          data: base64Image2,
+          mimeType: mimeType2
+        }
+      });
+
+      // 为双图片合成添加提示词
+      contents.push({
+        text: prompt
+      });
+    } else if (referenceImageUrl) {
+      // 单图片模式：处理一张参考图片
+      console.log("🖼️ Adding reference image for image editing/composition");
+
+      // 下载参考图片并转换为Base64
+      const imageResponse = await fetch(referenceImageUrl);
+      if (!imageResponse.ok) {
+        throw new Error(`Failed to fetch reference image: ${imageResponse.statusText}`);
+      }
+
+      const imageBuffer = await imageResponse.arrayBuffer();
+      const base64Image = Buffer.from(imageBuffer).toString('base64');
+      const mimeType = imageResponse.headers.get('content-type') || 'image/png';
+
+      contents.push({
+        inlineData: {
+          data: base64Image,
+          mimeType: mimeType
+        }
+      });
+
+      // 为图像编辑添加提示词
+      contents.push({
+        text: prompt
+      });
+    } else {
+      // 纯文本生成图片
+      contents.push({
+        text: prompt
+      });
+    }
+
+    console.log("📤 Sending request to Gemini 2.5 Flash Image API");
+
+    // 发送请求到Gemini API
+    const result = await model.generateContent(contents);
+    const response = await result.response;
+
+    // 检查响应
+    const candidates = response.candidates;
+    if (!candidates || candidates.length === 0) {
+      throw new Error("No image generated by Gemini");
+    }
+
+    console.log("🔍 Gemini response candidates:", candidates.length);
+
+    // 获取生成的图片
+    const candidate = candidates[0];
+    
+    // 添加详细的调试信息
+    console.log("🔍 Gemini response structure:", JSON.stringify({
+      hasContent: !!candidate.content,
+      hasParts: !!candidate.content?.parts,
+      partsLength: candidate.content?.parts?.length || 0,
+      partsStructure: candidate.content?.parts?.map((part: any) => ({
+        hasText: !!part.text,
+        hasInlineData: !!part.inlineData,
+        hasExectuableCode: !!part.executableCode,
+        hasCodeExecutionResult: !!part.codeExecutionResult,
+        keys: Object.keys(part)
+      })) || []
+    }, null, 2));
+    
+    if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
+      console.log("❌ No content or parts found in candidate:", JSON.stringify(candidate, null, 2));
+      throw new Error("No image content in Gemini response");
+    }
+
+    // 查找图片部分
+    const imagePart = candidate.content.parts.find((part: any) => part.inlineData);
+    if (!imagePart || !imagePart.inlineData) {
+      console.log("❌ No inline data found, response parts:", JSON.stringify(candidate.content.parts, null, 2));
+      throw new Error("No image data found in Gemini response");
+    }
+
+    console.log("🎯 Gemini generated image successfully");
+
+    // 解码Base64图片数据
+    const imageData = imagePart.inlineData.data;
+    const mimeType = imagePart.inlineData.mimeType || "image/png";
+
+    // 转换为Uint8Array
+    const imageBuffer = Buffer.from(imageData, 'base64');
+    const bytes = new Uint8Array(imageBuffer);
+
+    console.log("💾 Uploading generated image to storage, size:", bytes.length, "bytes");
+
+    // 存储到Supabase Storage - 使用优化的公共URL版本提高上传速度
+    const fileName = `gemini/${crypto.randomUUID()}.${mimeType.includes('jpeg') ? 'jpg' : 'png'}`;
+    const url = await putAndGetPublicUrl(fileName, bytes, mimeType);
+
+    console.log("✅ Gemini image generation completed, URL:", url);
+
+    return {
+      url: url,
+      optimizedPrompt: prompt
+    };
+
+  } catch (error) {
+    console.error("❌ Gemini image generation failed:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Gemini图片生成失败: ${errorMessage}`);
+  }
+}
+
 
 /**
  * 使用Gemini生成结构化的镜头规划JSON

@@ -18,18 +18,22 @@ function validateAndFixRatio(ratio: string): string {
 
 // 根据任务类型选择正确的模型
 function selectModelForTask(taskType: 'image_to_video' | 'video_to_video' | 'text_to_video', providedModel?: string): string {
-  if (providedModel && ['gen4_turbo', 'gen4_turbo', 'gen3a_turbo', 'act_two'].includes(providedModel)) {
-    return providedModel;
-  }
-
-  // 根据任务类型选择最佳模型
+  // 根据任务类型选择最佳模型，基于当前可用的模型
   switch (taskType) {
     case 'video_to_video':
-      return 'gen4_turbo'; // video-to-video使用gen4_turbo
+      // video-to-video端点：使用gen3a_turbo（经验证可用）
+      if (providedModel && ['gen3a_turbo', 'gen3', 'act_two'].includes(providedModel)) {
+        return providedModel;
+      }
+      return 'gen3a_turbo'; // 使用经过验证的模型
     case 'image_to_video':
     case 'text_to_video':
     default:
-      return 'gen4_turbo'; // image-to-video使用gen4_turbo
+      // image-to-video端点：继续尝试gen4，如果不行就用gen3a_turbo
+      if (providedModel && ['gen4', 'gen3a_turbo', 'gen3', 'act_two'].includes(providedModel)) {
+        return providedModel;
+      }
+      return 'gen3a_turbo'; // 统一使用gen3a_turbo
   }
 }
 
@@ -74,6 +78,8 @@ export interface RunwayVideoOptions {
   duration?: number; // 视频时长（秒）
   ratio?: string;    // 比例，如 "1280:720"
   model?: string;    // 模型名称
+  fixedImagePath?: string; // 固定图片路径（来自public目录）
+  imageToVideo?: boolean; // 是否为图片转视频模式
 }
 
 export interface RunwayLongVideoOptions {
@@ -100,15 +106,50 @@ export async function generateVideoRunway(options: RunwayVideoOptions) {
     referenceVideoUrl,
     duration = 5,
     ratio: rawRatio = "1280:720",
-    model // 不设置默认值，由任务类型决定
+    model, // 不设置默认值，由任务类型决定
+    fixedImagePath,
+    imageToVideo
   } = options;
 
   // 验证并修正ratio参数
   const ratio = validateAndFixRatio(rawRatio);
 
-  console.log("🎬 Starting Runway video generation:", { prompt, referenceImageUrl, referenceVideoUrl, duration, ratio, model });
+  console.log("🎬 Starting Runway video generation:", { prompt, referenceImageUrl, referenceVideoUrl, duration, ratio, model, fixedImagePath, imageToVideo });
 
   try {
+    // 处理固定图片路径，转换为完整URL
+    let fixedImageUrl: string | undefined;
+    if (fixedImagePath) {
+      // 将相对路径转换为完整URL（假设部署在域名下）
+      fixedImageUrl = `${process.env.NEXTAUTH_URL || 'http://localhost:3000'}${fixedImagePath}`;
+      console.log("🖼️ Using fixed image:", fixedImageUrl);
+    }
+
+    // 如果是图片转视频模式，使用专门的处理逻辑
+    if (imageToVideo && referenceImageUrl) {
+      console.log("📸 Using image-to-video mode");
+      return await processImageToVideo({
+        imageUrl: referenceImageUrl,
+        prompt,
+        duration,
+        ratio,
+        model
+      });
+    }
+
+    // 如果有固定图片和用户视频，使用特殊处理逻辑
+    if (fixedImageUrl && referenceVideoUrl) {
+      console.log("🎭 Using fixed image + user video mode");
+      return await processVideoWithFixedImage({
+        videoUrl: referenceVideoUrl,
+        imageUrl: fixedImageUrl,
+        prompt,
+        duration,
+        ratio,
+        model
+      });
+    }
+
     // 如果同时有视频和图片，这是角色任务
     if (referenceVideoUrl && referenceImageUrl) {
       console.log("🎭 Starting face swap process");
@@ -116,31 +157,31 @@ export async function generateVideoRunway(options: RunwayVideoOptions) {
       // 首先尝试使用 Act-Two API（如果可用）
       try {
         return await generateFaceSwapWithActTwo({
-          drivingVideoUrl: referenceVideoUrl,
-          characterImageUrl: referenceImageUrl,
+          drivingVideoUrl: referenceVideoUrl!,
+          characterImageUrl: referenceImageUrl!,
           prompt,
           duration,
           ratio,
-          model
+          model: model || 'act_two'
         });
       } catch (error) {
         console.warn("⚠️ Act-Two not available, falling back to alternative method:", (error as Error).message);
 
         // 备用方案：使用改进的 video-to-video 方法
         return await generateFaceSwapFallback({
-          drivingVideoUrl: referenceVideoUrl,
-          characterImageUrl: referenceImageUrl,
+          drivingVideoUrl: referenceVideoUrl!,
+          characterImageUrl: referenceImageUrl!,
           prompt,
           duration,
           ratio,
-          model
+          model: selectModelForTask('image_to_video', model)
         });
       }
     }
     // 如果只有视频输入，使用video-to-video端点处理视频特效
     else if (referenceVideoUrl) {
       console.log("📹 Using video-to-video mode for video effects");
-      return await processVideoToVideo(referenceVideoUrl, prompt, { model, duration, ratio });
+      return await processVideoToVideo(referenceVideoUrl!, prompt, { model: selectModelForTask('video_to_video', model), duration, ratio });
     }
     
     // 根据文档，没有单独的text-to-video端点，使用image_to_video端点
@@ -157,7 +198,7 @@ export async function generateVideoRunway(options: RunwayVideoOptions) {
     } else {
       // 如果没有参考图片，使用text-to-video模式
       // 根据Runway API文档，我们需要使用不同的端点
-      return await generateTextToVideo(prompt, { duration, ratio, model });
+      return await generateTextToVideo(prompt, { duration, ratio, model: selectModelForTask('text_to_video', model) });
     }
     
     // 添加duration参数
@@ -584,7 +625,7 @@ export async function generateLongVideoRunway(options: RunwayLongVideoOptions) {
       const firstFrameResult = await generateWithDefaultImage(englishPrompt, {
         duration: 5, // 临时生成5秒视频来获取首帧
         ratio: shotPlan.ratio,
-        model: "gen4_turbo"
+        model: selectModelForTask('image_to_video')
       });
       
       // 下载视频并提取首帧
@@ -945,7 +986,7 @@ async function mergeVideoSegments(segments: VideoSegment[], jobId: string): Prom
         const mergedResult = await processVideoToVideo(
           currentVideo, 
           mergePrompt, 
-          { model: "gen4_turbo", duration: 10, ratio: "1280:720" }
+          { model: selectModelForTask('video_to_video'), duration: 10, ratio: "1280:720" }
         );
         currentVideo = mergedResult.url;
         console.log(`✅ Merged segment ${i + 1}`);
@@ -1192,4 +1233,132 @@ async function processVideoToVideoWithCharacter({
 
   console.log("✅ Face swap result stored successfully:", storageUrl);
   return { url: storageUrl };
+}
+
+// 处理固定图片 + 用户视频的特殊情况
+async function processVideoWithFixedImage(options: {
+  videoUrl: string;
+  imageUrl: string;
+  prompt: string;
+  duration: number;
+  ratio: string;
+  model?: string;
+}) {
+  const { videoUrl, imageUrl, prompt, duration, ratio, model } = options;
+  
+  console.log("🎭 Processing video with fixed image:", { videoUrl, imageUrl, prompt, duration, ratio, model });
+
+  try {
+    // 根据现有成功案例，Runway主要使用image_to_video端点
+    // 以固定图片为基础，在prompt中融入用户视频的动态描述
+    const enhancedPrompt = `${prompt}. Create dynamic video effects based on the provided image. Generate realistic motion, dramatic visual effects, and cinematic quality animation. The scene should have intense action, dynamic movement, and professional video production quality.`;
+    
+    console.log("🎯 Using image_to_video approach with enhanced prompt:", enhancedPrompt.substring(0, 150) + "...");
+
+    // 使用image_to_video端点，这是Runway API的主要工作方式
+    const requestBody = {
+      promptText: enhancedPrompt,
+      promptImage: imageUrl, // 固定的爆炸图片作为视觉基础
+      model: selectModelForTask('image_to_video', model),
+      ratio: validateAndFixRatio(ratio),
+      duration: duration
+    };
+
+    console.log("📤 Sending image_to_video request with fixed image:", {
+      promptText: requestBody.promptText.substring(0, 100) + "...",
+      promptImage: "provided",
+      model: requestBody.model,
+      ratio: requestBody.ratio,
+      duration: requestBody.duration
+    });
+
+    const response = await fetchWithRetry(`${RUNWAY_API_BASE_URL}/image_to_video`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${RUNWAY_API_KEY}`,
+        'Content-Type': 'application/json',
+        'X-Runway-Version': '2024-11-06'
+      },
+      body: JSON.stringify(requestBody)
+    }, 3);
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error("❌ Runway image_to_video API error response:", error);
+      throw new Error(`Runway API failed: ${response.status} ${error}`);
+    }
+
+    const taskData = await response.json();
+    console.log("📋 Image_to_video task created:", taskData.id);
+
+    // 等待视频生成完成
+    const videoResultUrl = await waitForVideoGeneration(taskData.id);
+    console.log("✅ Video generated from fixed image:", videoResultUrl);
+
+    return { url: videoResultUrl };
+    
+  } catch (error) {
+    console.error("❌ Failed to process video with fixed image:", error);
+    throw new Error(`视频特效处理失败: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// 处理图片转视频的功能
+async function processImageToVideo(options: {
+  imageUrl: string;
+  prompt: string;
+  duration: number;
+  ratio: string;
+  model?: string;
+}) {
+  const { imageUrl, prompt, duration, ratio, model } = options;
+  
+  console.log("📸 Processing image-to-video:", { imageUrl, prompt, duration, ratio, model });
+
+  try {
+    // 使用image-to-video端点
+    const endpoint = '/image_to_video';
+    const requestBody: any = {
+      promptText: prompt,
+      promptImage: imageUrl, // 用户上传的图片
+      model: selectModelForTask('image_to_video', model),
+      ratio: validateAndFixRatio(ratio)
+    };
+
+    // 添加duration参数（如果支持）
+    if (duration && (duration === 5 || duration === 10)) {
+      requestBody.duration = duration;
+    }
+
+    console.log("📤 Sending image-to-video request:", JSON.stringify(requestBody, null, 2));
+
+    const response = await fetchWithRetry(`${RUNWAY_API_BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${RUNWAY_API_KEY}`,
+        'Content-Type': 'application/json',
+        'X-Runway-Version': '2024-11-06'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error("❌ Runway image-to-video API error response:", error);
+      throw new Error(`Runway image-to-video API failed: ${response.status} ${error}`);
+    }
+
+    const taskData = await response.json();
+    console.log("📋 Image-to-video task created:", taskData.id);
+
+    // 等待视频生成完成
+    const videoResultUrl = await waitForVideoGeneration(taskData.id);
+    console.log("✅ Image-to-video generated:", videoResultUrl);
+
+    return { url: videoResultUrl };
+    
+  } catch (error) {
+    console.error("❌ Failed to process image-to-video:", error);
+    throw new Error(`图片转视频失败: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }

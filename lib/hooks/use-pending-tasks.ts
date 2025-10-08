@@ -54,20 +54,37 @@ export function usePendingTasks() {
     // 立即检查一次
     checkPendingJobs();
     
-    // 每10秒检查一次待处理任务
-    const interval = setInterval(checkPendingJobs, 10000);
+    // 智能轮询策略：根据任务状态调整轮询频率
+    let interval: NodeJS.Timeout;
     
-    return () => clearInterval(interval);
-  }, []);
+    const scheduleNextCheck = () => {
+      // 如果有待处理任务，更频繁地轮询；否则减少频率
+      const pollInterval = pendingJobs.length > 0 ? 3000 : 10000; // 3秒 vs 10秒
+      interval = setTimeout(() => {
+        checkPendingJobs().then(scheduleNextCheck);
+      }, pollInterval);
+    };
+    
+    scheduleNextCheck();
+    
+    return () => clearTimeout(interval);
+  }, [pendingJobs.length]); // 依赖于待处理任务数量
 
   const hasPendingTasks = pendingJobs.length > 0;
   const pendingCount = pendingJobs.length;
+
+  // 手动清理状态的函数
+  const clearPendingJobs = () => {
+    setPendingJobs([]);
+    console.log('🧹 Manually cleared pending jobs state');
+  };
 
   return {
     pendingJobs,
     hasPendingTasks,
     pendingCount,
     isLoading,
-    refreshPendingJobs: checkPendingJobs
+    refreshPendingJobs: checkPendingJobs,
+    clearPendingJobs
   };
 }
