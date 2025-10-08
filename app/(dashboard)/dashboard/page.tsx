@@ -11,14 +11,16 @@ import {
 } from '@/components/ui/card';
 import { customerPortalAction } from '@/lib/payments/actions';
 import { useActionState } from 'react';
-import { TeamDataWithMembers, User } from '@/lib/db/schema';
+import { User } from '@supabase/supabase-js';
 import { removeTeamMember, inviteTeamMember } from '@/app/(login)/actions';
 import useSWR from 'swr';
-import { Suspense } from 'react';
+import { Suspense, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
-import { Loader2, PlusCircle, Download, Image, Video, Trash2 } from 'lucide-react';
+import { Loader2, PlusCircle, Download, Image, Video, Trash2, Circle } from 'lucide-react';
 
 type ActionState = {
   error?: string;
@@ -45,40 +47,7 @@ function SubscriptionSkeleton() {
   );
 }
 
-function ManageSubscription() {
-  const { data: teamData } = useSWR<TeamDataWithMembers>('/api/team', fetcher);
-
-  return (
-    <Card className="mb-8">
-      <CardHeader>
-        <CardTitle>Team Subscription</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center">
-            <div className="mb-4 sm:mb-0">
-              <p className="font-medium">
-                Current Plan: {teamData?.planName || 'Free'}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {teamData?.subscriptionStatus === 'active'
-                  ? 'Billed monthly'
-                  : teamData?.subscriptionStatus === 'trialing'
-                  ? 'Trial period'
-                  : 'No active subscription'}
-              </p>
-            </div>
-            <form action={customerPortalAction}>
-              <Button type="submit" variant="outline">
-                Manage Subscription
-              </Button>
-            </form>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+// 生成历史组件现在成为主要内容
 
 function TeamMembersSkeleton() {
   return (
@@ -102,14 +71,14 @@ function TeamMembersSkeleton() {
 }
 
 function TeamMembers() {
-  const { data: teamData } = useSWR<TeamDataWithMembers>('/api/team', fetcher);
+  const { data: teamData } = useSWR<any>('/api/team', fetcher);
   const [removeState, removeAction, isRemovePending] = useActionState<
     ActionState,
     FormData
   >(removeTeamMember, {});
 
-  const getUserDisplayName = (user: Pick<User, 'id' | 'name' | 'email'>) => {
-    return user.name || user.email || 'Unknown User';
+  const getUserDisplayName = (user: any) => {
+    return user?.name || user?.email || 'Unknown User';
   };
 
   if (!teamData?.teamMembers?.length) {
@@ -132,7 +101,7 @@ function TeamMembers() {
       </CardHeader>
       <CardContent>
         <ul className="space-y-4">
-          {teamData.teamMembers.map((member, index) => (
+          {teamData.teamMembers.map((member: any, index: number) => (
             <li key={member.id} className="flex items-center justify-between">
               <div className="flex items-center space-x-4">
                 <Avatar>
@@ -148,7 +117,7 @@ function TeamMembers() {
                   <AvatarFallback>
                     {getUserDisplayName(member.user)
                       .split(' ')
-                      .map((n) => n[0])
+                      .map((n: string) => n[0])
                       .join('')}
                   </AvatarFallback>
                 </Avatar>
@@ -270,7 +239,22 @@ function GenerationHistory() {
       </CardHeader>
       <CardContent>
         {!generations?.length ? (
-          <p className="text-muted-foreground">还没有生成历史。</p>
+          <div className="text-center py-8">
+            <div className="w-16 h-16 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-4">
+              <Circle className="w-8 h-8 text-gray-400" />
+            </div>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">
+              暂无生成历史
+            </h3>
+            <p className="text-gray-500 mb-4">
+              开始生成AI内容，在这里查看历史记录
+            </p>
+            <Button asChild>
+              <Link href="/generate">
+                开始生成
+              </Link>
+            </Button>
+          </div>
         ) : (
           <div className="space-y-4">
             {generations.map((gen) => (
@@ -315,6 +299,7 @@ function GenerationHistory() {
                     gen.result_url,
                     `monna-${gen.type}-${gen.id.slice(0, 8)}.${gen.type === 'image' ? 'png' : 'mp4'}`
                   )}
+                  title="重新下载"
                 >
                   <Download className="h-4 w-4" />
                 </Button>
@@ -419,21 +404,13 @@ function InviteTeamMember() {
   );
 }
 
-export default function SettingsPage() {
+export default function GenerationHistoryPage() {
   return (
     <section className="flex-1 p-4 lg:p-8">
-      <h1 className="text-lg lg:text-2xl font-medium mb-6">Team Settings</h1>
-      <Suspense fallback={<SubscriptionSkeleton />}>
-        <ManageSubscription />
-      </Suspense>
+      <h1 className="text-lg lg:text-2xl font-medium mb-6">生成历史</h1>
+      
       <Suspense fallback={<GenerationHistorySkeleton />}>
         <GenerationHistory />
-      </Suspense>
-      <Suspense fallback={<TeamMembersSkeleton />}>
-        <TeamMembers />
-      </Suspense>
-      <Suspense fallback={<InviteTeamMemberSkeleton />}>
-        <InviteTeamMember />
       </Suspense>
     </section>
   );

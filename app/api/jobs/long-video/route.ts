@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { generateLongVideoRunway } from "@/lib/providers/runway";
+import { getUserTeamSubscriptionInfo } from "@/lib/db/queries";
+import { CreditManager } from "@/lib/credits/credit-manager";
 
 export async function POST(req: NextRequest) {
   try {
@@ -107,8 +109,90 @@ export async function POST(req: NextRequest) {
         }))
       });
 
-      // TODO: 校验订阅/额度
+      // 获取用户团队订阅信息并校验信用点
+      const { SUBSCRIPTION_PLANS } = CreditManager;
+      
+      const subscriptionInfo = await getUserTeamSubscriptionInfo();
+      if (!subscriptionInfo) {
+        return NextResponse.json({ error: "team not found" }, { status: 404 });
+      }
+
+      const planName = subscriptionInfo.planName || 'free';
+      const planConfig = SUBSCRIPTION_PLANS[planName as keyof typeof SUBSCRIPTION_PLANS] || SUBSCRIPTION_PLANS.free;
+
+      // 检查计划是否支持长视频生成功能
+      if (!planConfig.features.longVideoGeneration) {
+        return NextResponse.json({
+          error: "plan_restriction",
+          message: `当前计划 ${planConfig.name} 不支持长视频生成功能，请升级到专业档或企业档`
+        }, { status: 403 });
+      }
+
+      // 计算所需信用点 (基于总时长)
+      const totalDuration = shotPlan.total_seconds || 30;
+      const requiredCredits = CreditManager.calculateRequiredCredits({
+        taskType: 'longvideo',
+        planName,
+        duration: totalDuration
+      });
+
+      // 检查信用点余额
+      const hasEnoughCredits = await CreditManager.hasEnoughCredits(subscriptionInfo.id, requiredCredits);
+      if (!hasEnoughCredits) {
+        const currentCredits = await CreditManager.getTeamCredits(subscriptionInfo.id);
+        return NextResponse.json({
+          error: "insufficient_credits",
+          message: `长视频生成需要 ${requiredCredits} 信用点，当前余额 ${currentCredits?.credits || 0} 信用点`,
+          required: requiredCredits,
+          available: currentCredits?.credits || 0
+        }, { status: 402 });
+      }
+
       const jobId = crypto.randomUUID();
+      
+      // 先创建job记录
+      const { error: insertError } = await supa
+        .from("jobs")
+        .insert({
+          id: jobId,
+          user_id: user.id,
+          provider,
+          type: "longvideo", // 修正类型为longvideo
+          prompt,
+          video_duration: shotPlan.shots?.reduce((total: number, shot: any) => total + (shot.duration || 5), 0) || 30, // 计算总时长
+          credits_consumed: requiredCredits,
+          status: "queued",
+          metadata: { shotPlan }
+        });
+
+      if (insertError) {
+        console.error("Long video job insertion failed:", insertError);
+        return NextResponse.json(
+          { error: "failed to create long video job" }, 
+          { status: 500 }
+        );
+      }
+
+      // Job创建成功后，扣减信用点
+      const creditDeducted = await CreditManager.consumeCredits({
+        teamId: subscriptionInfo.id,
+        jobId: jobId,
+        amount: requiredCredits,
+        taskType: 'longvideo',
+        planName: planName,
+      });
+
+      if (!creditDeducted) {
+        // 信用点扣减失败，删除已创建的job
+        await supa.from("jobs").delete().eq("id", jobId);
+        console.error("Long video credit deduction failed, job deleted");
+        return NextResponse.json({
+          error: "credit_deduction_failed",
+          message: "信用点扣费失败，请重试"
+        }, { status: 500 });
+      }
+
+      console.log(`💳 Credit deducted: ${requiredCredits} credits for long video generation (Job: ${jobId})`);
       
       // 插入长视频任务到数据库
       const { error: insertError } = await supa

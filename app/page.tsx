@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Crown, User, LogOut } from "lucide-react";
+import { Crown, User, LogOut, Image, Video } from "lucide-react";
 import { useAuthStatus } from "@/lib/hooks/use-auth";
+import { useUserStats } from "@/lib/hooks/use-user-stats";
 import { useTranslation } from "@/lib/contexts/language-context";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { signOut } from "@/app/(login)/actions";
@@ -14,11 +15,19 @@ import { signOut } from "@/app/(login)/actions";
 // Figma assets (placeholder - replace with actual assets when available)
 const imgFrame = "/assets/play-icon.svg";
 const imgFrame1 = "/assets/dropdown-icon.svg";
-
+ 
 export default function HomePage() {
   const { user, loading } = useAuthStatus();
   const { t } = useTranslation();
-  
+  const {
+    totalImageGenerations,
+    totalVideoGenerations,
+    imageQuota,
+    videoQuota,
+    remainingCredits,
+    planName
+  } = useUserStats();
+
   // 获取用户邮箱首字母
   const getUserInitial = (email: string) => {
     return email.charAt(0).toUpperCase();
@@ -69,10 +78,13 @@ export default function HomePage() {
                     <div className="text-sm font-medium text-gray-900">{user.email}</div>
                     <div className="flex items-center mt-1">
                       <Crown className="h-3 w-3 text-orange-600 mr-1" />
-                      <Badge variant="secondary" className="text-xs">{t('freeUser')}</Badge>
+                      <Badge variant="secondary" className="text-xs">
+                        {planName === 'free' ? t('freeUser') : `${planName.toUpperCase()} 用户`}
+                      </Badge>
                     </div>
-                    <div className="text-xs text-gray-600 mt-1">
-                      {t('generationCount')}: <span className="font-semibold text-orange-600">3/5 {t('times')}</span>
+                    {/* 剩余 Credit */}
+                    <div className="text-xs text-gray-600 mt-2">
+                      剩余 Credit: <span className="font-semibold text-orange-600">{remainingCredits}</span>
                     </div>
                   </div>
                   <DropdownMenuSeparator />

@@ -1,63 +1,36 @@
 import { createSupabaseServer } from '@/lib/supabase/server'
 import { createServerClient } from '@supabase/ssr'
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db/drizzle'
-import { users, teams, teamMembers, activityLogs, ActivityType } from '@/lib/db/schema'
-import { eq } from 'drizzle-orm'
+import { createUserTeam } from '@/lib/db/queries'
 
 async function ensureUserInDatabase(authUser: any) {
   try {
-    // Check if user already exists in our database
-    const existingUser = await db
-      .select()
-      .from(users)
-      .where(eq(users.auth_id, authUser.id))
-      .limit(1)
+    const supabase = await createSupabaseServer();
+    
+    // 检查用户是否已存在于 profiles 表中
+    const { data: existingProfile } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .eq('id', authUser.id)
+      .single();
 
-    if (existingUser.length > 0) {
-      console.log('User already exists in database:', existingUser[0].email)
-      return existingUser[0]
+    if (existingProfile) {
+      console.log('User already exists in database:', existingProfile.email);
+      return existingProfile;
     }
 
-    // Create user in our database
-    console.log('Creating new user in database:', authUser.email)
-    const [newUser] = await db
-      .insert(users)
-      .values({
-        email: authUser.email,
-        auth_id: authUser.id,
-        role: 'owner'
-      })
-      .returning()
-
-    // Create a team for the user
-    const [newTeam] = await db
-      .insert(teams)
-      .values({
-        name: `${authUser.email}'s Team`
-      })
-      .returning()
-
-    // Add user to the team
-    await db.insert(teamMembers).values({
-      userId: newUser.id,
-      teamId: newTeam.id,
-      role: 'owner'
-    })
-
-    // Log activity
-    await db.insert(activityLogs).values({
-      teamId: newTeam.id,
-      userId: newUser.id,
-      action: ActivityType.SIGN_UP,
-      ipAddress: ''
-    })
-
-    console.log('User setup completed:', newUser.email)
-    return newUser
+    // 使用统一的创建用户函数
+    console.log('Creating new user in database:', authUser.email);
+    const team = await createUserTeam(authUser);
+    
+    console.log('User setup completed:', authUser.email);
+    return {
+      id: authUser.id,
+      email: authUser.email
+    };
   } catch (error) {
-    console.error('Error setting up user:', error)
-    throw error
+    console.error('Error setting up user:', error);
+    throw error;
   }
 }
 

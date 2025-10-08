@@ -5,16 +5,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
 import { updateAccount } from '@/app/(login)/actions';
-import { User } from '@/lib/db/schema';
+import { User } from '@supabase/supabase-js';
 import useSWR from 'swr';
 import { Suspense } from 'react';
+import { useTranslation } from '@/lib/contexts/language-context';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 type ActionState = {
   name?: string;
+  gender?: string;
   error?: string;
   success?: string;
 };
@@ -23,51 +26,76 @@ type AccountFormProps = {
   state: ActionState;
   nameValue?: string;
   emailValue?: string;
+  genderValue?: string;
 };
 
 function AccountForm({
   state,
   nameValue = '',
-  emailValue = ''
+  emailValue = '',
+  genderValue = ''
 }: AccountFormProps) {
+  const { t } = useTranslation();
+  
   return (
     <>
       <div>
         <Label htmlFor="name" className="mb-2">
-          Name
+          {t('name')}
         </Label>
         <Input
           id="name"
           name="name"
-          placeholder="Enter your name"
+          placeholder={t('name')}
           defaultValue={state.name || nameValue}
           required
         />
       </div>
       <div>
+        <Label htmlFor="gender" className="mb-2">
+          {t('gender')}
+        </Label>
+        <Select name="gender" defaultValue={state.gender || genderValue || "not_specified"}>
+          <SelectTrigger>
+            <SelectValue placeholder="未指定" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="not_specified">未指定</SelectItem>
+            <SelectItem value="male">男</SelectItem>
+            <SelectItem value="female">女</SelectItem>
+            <SelectItem value="other">其他</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
         <Label htmlFor="email" className="mb-2">
-          Email
+          {t('email')}
         </Label>
         <Input
           id="email"
           name="email"
           type="email"
-          placeholder="Enter your email"
+          placeholder={t('email')}
           defaultValue={emailValue}
-          required
+          disabled
+          className="bg-gray-50"
         />
+        <p className="text-sm text-gray-500 mt-1">
+          邮箱地址不可修改
+        </p>
       </div>
     </>
   );
 }
 
 function AccountFormWithData({ state }: { state: ActionState }) {
-  const { data: user } = useSWR<User>('/api/user', fetcher);
+  const { data: user } = useSWR<any>('/api/user', fetcher);
   return (
     <AccountForm
       state={state}
       nameValue={user?.name ?? ''}
       emailValue={user?.email ?? ''}
+      genderValue={user?.gender ?? ''}
     />
   );
 }
@@ -77,16 +105,17 @@ export default function GeneralPage() {
     updateAccount,
     {}
   );
+  const { t } = useTranslation();
 
   return (
     <section className="flex-1 p-4 lg:p-8">
       <h1 className="text-lg lg:text-2xl font-medium text-gray-900 mb-6">
-        General Settings
+        {t('personalInfo')}
       </h1>
 
       <Card>
         <CardHeader>
-          <CardTitle>Account Information</CardTitle>
+          <CardTitle>{t('personalInfo')}</CardTitle>
         </CardHeader>
         <CardContent>
           <form className="space-y-4" action={formAction}>
@@ -107,10 +136,10 @@ export default function GeneralPage() {
               {isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Saving...
+                  {t('loading')}
                 </>
               ) : (
-                'Save Changes'
+                t('save')
               )}
             </Button>
           </form>

@@ -1,48 +1,21 @@
 'use server';
 
 import { z } from 'zod';
-import { and, eq, sql } from 'drizzle-orm';
-import { db } from '@/lib/db/drizzle';
-import {
-  User,
-  users,
-  teams,
-  teamMembers,
-  activityLogs,
-  type NewUser,
-  type NewTeam,
-  type NewTeamMember,
-  type NewActivityLog,
-  ActivityType,
-  invitations
-} from '@/lib/db/schema';
 import { redirect } from 'next/navigation';
-import { cookies } from 'next/headers';
 import { createSupabaseServer } from '@/lib/supabase/server';
 import { createCheckoutSession } from '@/lib/payments/stripe';
-import { getUser, getUserWithTeam } from '@/lib/db/queries';
+import { 
+  getUser, 
+  getUserWithTeam, 
+  logActivity, 
+  createUserTeam 
+} from '@/lib/db/queries';
 import {
   validatedAction,
   validatedActionWithUser
 } from '@/lib/auth/middleware';
 
-async function logActivity(
-  teamId: number | null | undefined,
-  userId: number,
-  type: ActivityType,
-  ipAddress?: string
-) {
-  if (teamId === null || teamId === undefined) {
-    return;
-  }
-  const newActivity: NewActivityLog = {
-    teamId,
-    userId,
-    action: type,
-    ipAddress: ipAddress || ''
-  };
-  await db.insert(activityLogs).values(newActivity);
-}
+// logActivity 函数现在从 queries.ts 导入，无需在此重复定义
 
 const signInSchema = z.object({
   email: z.string().email().min(3).max(255),
@@ -92,26 +65,20 @@ export const signIn = validatedAction(signInSchema, async (data, formData) => {
     };
   }
 
-  const userWithTeam = await db
-    .select({
-      user: users,
-      team: teams
-    })
-    .from(users)
-    .leftJoin(teamMembers, eq(users.id, teamMembers.userId))
-    .leftJoin(teams, eq(teamMembers.teamId, teams.id))
-    .where(eq(users.email, email))
-    .limit(1);
-
-  if (userWithTeam.length > 0) {
-    const { user: foundUser, team: foundTeam } = userWithTeam[0];
-    await logActivity(foundTeam?.id, foundUser.id, ActivityType.SIGN_IN);
+  // 获取当前已认证的用户
+  const { data: { user: currentUserData } } = await supabase.auth.getUser();
+  if (currentUserData) {
+    const userWithTeam = await getUserWithTeam(currentUserData.id);
+    if (userWithTeam) {
+      await logActivity(userWithTeam.teamId, userWithTeam.id, 'SIGN_IN');
+    }
   }
 
   const redirectTo = formData.get('redirect') as string | null;
   if (redirectTo === 'checkout') {
     const priceId = formData.get('priceId') as string;
-    const team = userWithTeam.length > 0 ? userWithTeam[0].team : undefined;
+    const userWithTeam = currentUserData ? await getUserWithTeam(currentUserData.id) : null;
+    const team = userWithTeam ? { id: userWithTeam.teamId } as any : null;
     return createCheckoutSession({ team, priceId });
   }
 
@@ -183,119 +150,35 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
     requiresConfirmation: true
   };
 
-  // NOTE: The following code is kept but will never be reached during normal signup flow
-  // It's only executed when users are already confirmed (which shouldn't happen in signUp action)
+  // NOTE: 此部分代码在正常的注册流程中不会被执行
+  // 仅在用户已经确认时才会执行（在signUp action中不应该发生）
   console.log('User already confirmed, creating database records for:', email);
 
-  const newUser: NewUser = {
-    email,
-    auth_id: signUpData.user.id,
-    role: 'owner' // Default role, will be overridden if there's an invitation
-  };
-
-  let createdUser;
   try {
-    [createdUser] = await db.insert(users).values(newUser).returning();
+    // 使用 createUserTeam 函数创建用户和团队
+    const team = await createUserTeam(signUpData.user!);
+    
+    // TODO: 处理邀请逻辑（如果需要）
+    if (inviteId) {
+      console.log('Invitation handling not yet implemented');
+      // 这里需要实现邀请处理逻辑
+    }
+
+    const redirectTo = formData.get('redirect') as string | null;
+    if (redirectTo === 'checkout') {
+      const priceId = formData.get('priceId') as string;
+      return createCheckoutSession({ team: team as any, priceId });
+    }
+
+    redirect('/generate');
   } catch (error: any) {
-    if (error.code === '23505' && error.constraint_name === 'users_email_unique') {
-      return {
-        error: 'An account with this email already exists. Please sign in instead.',
-        email,
-        password
-      };
-    }
+    console.error('Failed to create user team:', error);
     return {
       error: 'Failed to create user. Please try again.',
       email,
       password
     };
   }
-
-  if (!createdUser) {
-    return {
-      error: 'Failed to create user. Please try again.',
-      email,
-      password
-    };
-  }
-
-  let teamId: number;
-  let userRole: string;
-  let createdTeam: typeof teams.$inferSelect | null = null;
-
-  if (inviteId) {
-    // Check if there's a valid invitation
-    const [invitation] = await db
-      .select()
-      .from(invitations)
-      .where(
-        and(
-          eq(invitations.id, parseInt(inviteId)),
-          eq(invitations.email, email),
-          eq(invitations.status, 'pending')
-        )
-      )
-      .limit(1);
-
-    if (invitation) {
-      teamId = invitation.teamId;
-      userRole = invitation.role;
-
-      await db
-        .update(invitations)
-        .set({ status: 'accepted' })
-        .where(eq(invitations.id, invitation.id));
-
-      await logActivity(teamId, createdUser.id, ActivityType.ACCEPT_INVITATION);
-
-      [createdTeam] = await db
-        .select()
-        .from(teams)
-        .where(eq(teams.id, teamId))
-        .limit(1);
-    } else {
-      return { error: 'Invalid or expired invitation.', email, password };
-    }
-  } else {
-    // Create a new team if there's no invitation
-    const newTeam: NewTeam = {
-      name: `${email}'s Team`
-    };
-
-    [createdTeam] = await db.insert(teams).values(newTeam).returning();
-
-    if (!createdTeam) {
-      return {
-        error: 'Failed to create team. Please try again.',
-        email,
-        password
-      };
-    }
-
-    teamId = createdTeam.id;
-    userRole = 'owner';
-
-    await logActivity(teamId, createdUser.id, ActivityType.CREATE_TEAM);
-  }
-
-  const newTeamMember: NewTeamMember = {
-    userId: createdUser.id,
-    teamId: teamId,
-    role: userRole
-  };
-
-  await Promise.all([
-    db.insert(teamMembers).values(newTeamMember),
-    logActivity(teamId, createdUser.id, ActivityType.SIGN_UP)
-  ]);
-
-  const redirectTo = formData.get('redirect') as string | null;
-  if (redirectTo === 'checkout') {
-    const priceId = formData.get('priceId') as string;
-    return createCheckoutSession({ team: createdTeam, priceId });
-  }
-
-  redirect('/generate');
 });
 
 export async function signOut() {
@@ -318,7 +201,7 @@ export const updatePassword = validatedActionWithUser(
 
     // First, sign in with the current password to verify it
     const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: user.email,
+      email: user.email!,
       password: currentPassword
     });
 
@@ -361,7 +244,9 @@ export const updatePassword = validatedActionWithUser(
     }
 
     const userWithTeam = await getUserWithTeam(user.id);
-    await logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_PASSWORD);
+    if (userWithTeam?.teamId) {
+      await logActivity(userWithTeam.teamId, user.id, 'UPDATE_PASSWORD');
+    }
 
     return {
       success: 'Password updated successfully.'
@@ -380,7 +265,7 @@ export const deleteAccount = validatedActionWithUser(
     const supabase = await createSupabaseServer();
 
     const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: user.email,
+      email: user.email!,
       password
     });
 
@@ -393,11 +278,13 @@ export const deleteAccount = validatedActionWithUser(
 
     const userWithTeam = await getUserWithTeam(user.id);
 
-    await logActivity(
-      userWithTeam?.teamId,
-      user.id,
-      ActivityType.DELETE_ACCOUNT
-    );
+    if (userWithTeam?.teamId) {
+      await logActivity(
+        userWithTeam.teamId,
+        user.id,
+        'DELETE_ACCOUNT'
+      );
+    }
 
     const response = await fetch('/api/user/delete', { 
       method: 'POST',
@@ -427,12 +314,26 @@ export const updateAccount = validatedActionWithUser(
   updateAccountSchema,
   async (data, _, user) => {
     const { name, email } = data;
+    const supabase = await createSupabaseServer();
     const userWithTeam = await getUserWithTeam(user.id);
 
-    await Promise.all([
-      db.update(users).set({ name, email }).where(eq(users.id, user.id)),
-      logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_ACCOUNT)
-    ]);
+    const { error } = await supabase
+      .from('profiles')
+      .update({ name, email })
+      .eq('id', user.id);
+    
+    if (error) {
+      console.error('Failed to update account:', error);
+      return {
+        name,
+        email,
+        error: 'Failed to update account. Please try again.'
+      };
+    }
+
+    if (userWithTeam?.teamId) {
+      await logActivity(userWithTeam.teamId, user.id, 'UPDATE_ACCOUNT');
+    }
 
     return { name, success: 'Account updated successfully.' };
   }
@@ -446,25 +347,28 @@ export const removeTeamMember = validatedActionWithUser(
   removeTeamMemberSchema,
   async (data, _, user) => {
     const { memberId } = data;
+    const supabase = await createSupabaseServer();
     const userWithTeam = await getUserWithTeam(user.id);
 
     if (!userWithTeam?.teamId) {
       return { error: 'User is not part of a team' };
     }
 
-    await db
-      .delete(teamMembers)
-      .where(
-        and(
-          eq(teamMembers.id, memberId),
-          eq(teamMembers.teamId, userWithTeam.teamId)
-        )
-      );
+    const { error } = await supabase
+      .from('team_members')
+      .delete()
+      .eq('id', memberId)
+      .eq('team_id', userWithTeam.teamId);
+
+    if (error) {
+      console.error('Failed to remove team member:', error);
+      return { error: 'Failed to remove team member. Please try again.' };
+    }
 
     await logActivity(
       userWithTeam.teamId,
       user.id,
-      ActivityType.REMOVE_TEAM_MEMBER
+      'REMOVE_TEAM_MEMBER'
     );
 
     return { success: 'Team member removed successfully' };
@@ -480,55 +384,62 @@ export const inviteTeamMember = validatedActionWithUser(
   inviteTeamMemberSchema,
   async (data, _, user) => {
     const { email, role } = data;
+    const supabase = await createSupabaseServer();
     const userWithTeam = await getUserWithTeam(user.id);
 
     if (!userWithTeam?.teamId) {
       return { error: 'User is not part of a team' };
     }
 
-    const existingMember = await db
-      .select()
-      .from(users)
-      .leftJoin(teamMembers, eq(users.id, teamMembers.userId))
-      .where(
-        and(eq(users.email, email), eq(teamMembers.teamId, userWithTeam.teamId))
-      )
-      .limit(1);
+    // 检查是否已经是团队成员
+    const { data: existingMember } = await supabase
+      .from('team_members')
+      .select(`
+        profiles (
+          email
+        )
+      `)
+      .eq('team_id', userWithTeam.teamId)
+      .single();
 
-    if (existingMember.length > 0) {
+    const profiles = existingMember?.profiles as any;
+    if (profiles && profiles.email === email) {
       return { error: 'User is already a member of this team' };
     }
 
-    // Check if there's an existing invitation
-    const existingInvitation = await db
-      .select()
-      .from(invitations)
-      .where(
-        and(
-          eq(invitations.email, email),
-          eq(invitations.teamId, userWithTeam.teamId),
-          eq(invitations.status, 'pending')
-        )
-      )
-      .limit(1);
+    // 检查是否已经有待处理的邀请
+    const { data: existingInvitation } = await supabase
+      .from('invitations')
+      .select('id')
+      .eq('email', email)
+      .eq('team_id', userWithTeam.teamId)
+      .eq('status', 'pending')
+      .single();
 
-    if (existingInvitation.length > 0) {
+    if (existingInvitation) {
       return { error: 'An invitation has already been sent to this email' };
     }
 
-    // Create a new invitation
-    await db.insert(invitations).values({
-      teamId: userWithTeam.teamId,
-      email,
-      role,
-      invitedBy: user.id,
-      status: 'pending'
-    });
+    // 创建新邀请
+    const { error } = await supabase
+      .from('invitations')
+      .insert({
+        team_id: userWithTeam.teamId,
+        email,
+        role,
+        invited_by: user.id,
+        status: 'pending'
+      });
+
+    if (error) {
+      console.error('Failed to create invitation:', error);
+      return { error: 'Failed to send invitation. Please try again.' };
+    }
 
     await logActivity(
       userWithTeam.teamId,
       user.id,
-      ActivityType.INVITE_TEAM_MEMBER
+      'INVITE_TEAM_MEMBER'
     );
 
     // TODO: Send invitation email and include ?inviteId={id} to sign-up URL

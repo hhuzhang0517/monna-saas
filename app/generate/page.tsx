@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { ImageUpload } from "@/components/ui/image-upload";
+import { DualImageUpload } from "@/components/ui/dual-image-upload";
 import { VideoUpload } from "@/components/ui/video-upload";
 import { GenerationModal } from "@/components/generation-modal";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { X, Crown, Zap, User, CreditCard, RefreshCw, LogOut, Image, Video, ImagePlus, Trash2, Send } from "lucide-react";
+import { ImageComparisonSlider } from "@/components/ui/image-comparison-slider";
 import { useAuthStatus } from "@/lib/hooks/use-auth";
 import { usePendingTasks } from "@/lib/hooks/use-pending-tasks";
 import { useUserStats } from "@/lib/hooks/use-user-stats";
@@ -24,6 +26,7 @@ import { signOut } from "@/app/(login)/actions";
 interface FigmaTemplate {
   id: string;
   image: string;
+  afterImage?: string; // AI生成后的图片（用于对比展示）
   category: string;
   prompt: string;
 }
@@ -34,12 +37,15 @@ interface VideoTemplate {
   video: string;
   category: string;
   prompt: string;
+  fixedImage?: string; // 可选的固定图片路径
+  imageToVideo?: boolean; // 是否为图片转视频模式（用户上传图片而非视频）
 }
 
 // 图片分类定义
 const getCategoriesWithTranslation = (t: any) => ({
-  portrait: { name: t('portrait'), icon: "" },
+  expression: { name: t('expression'), icon: "" },
   artistic: { name: t('artistic'), icon: "" },
+  wearing: { name: "穿戴", icon: "" },
   anime: { name: t('anime'), icon: "" },
   landscape: { name: t('landscape'), icon: "" },
   abstract: { name: t('abstract'), icon: "" }
@@ -56,45 +62,56 @@ const getVideoCategoriesWithTranslation = (t: any) => ({
 
 // 各分类的图片模板数据
 const TEMPLATE_DATA = {
-  portrait: [
-    { id: "portrait-1", image: "/figma-designs/portrait/IMAGE-1.png", category: "portrait", prompt: "Make the person in the picture look like he or she is laughing" },
-    { id: "portrait-2", image: "/figma-designs/portrait/IMAGE-2.png", category: "portrait", prompt: "business portrait, corporate headshot, professional lighting" },
-    { id: "portrait-3", image: "/figma-designs/portrait/IMAGE-3.png", category: "portrait", prompt: "casual portrait, natural lighting, warm atmosphere" },
-    { id: "portrait-4", image: "/figma-designs/portrait/IMAGE-4.png", category: "portrait", prompt: "studio portrait, dramatic lighting, professional photography" },
-    { id: "portrait-5", image: "/figma-designs/portrait/IMAGE-5.png", category: "portrait", prompt: "outdoor portrait, golden hour lighting, nature background" },
-    { id: "portrait-6", image: "/figma-designs/portrait/IMAGE-6.png", category: "portrait", prompt: "vintage portrait style, classic photography, timeless look" },
-    { id: "portrait-7", image: "/figma-designs/portrait/IMAGE-7.png", category: "portrait", prompt: "modern portrait, contemporary style, clean background" },
-    { id: "portrait-8", image: "/figma-designs/portrait/IMAGE-8.png", category: "portrait", prompt: "artistic portrait, creative lighting, expressive mood" }
+  expression: [
+    { id: "portrait-1", image: "/figma-designs/portrait/IMAGE-1.jpg", afterImage: "/figma-designs/portrait/IMAGE-1-after.png", category: "大笑", prompt: "让图中的人物大笑" },
+    { id: "portrait-2", image: "/figma-designs/portrait/IMAGE-2.jpg", afterImage: "/figma-designs/portrait/IMAGE-2-after.png", category: "严肃", prompt: "让图中的人物表情变得严肃" },
+    { id: "portrait-3", image: "/figma-designs/portrait/IMAGE-3.jpg", afterImage: "/figma-designs/portrait/IMAGE-3-after.png", category: "微笑", prompt: "让图中的人物表情变得微笑" },
+    { id: "portrait-4", image: "/figma-designs/portrait/IMAGE-4.jpg", afterImage: "/figma-designs/portrait/IMAGE-4-after.png", category: "悲伤", prompt: "让图中的人物表情变得悲伤并流着泪" },
+    { id: "portrait-5", image: "/figma-designs/portrait/IMAGE-5.jpg", afterImage: "/figma-designs/portrait/IMAGE-5-after.png", category: "大哭", prompt: "让图中的人物表情变成大哭" },
+    { id: "portrait-6", image: "/figma-designs/portrait/IMAGE-6.jpg", afterImage: "/figma-designs/portrait/IMAGE-6-after.png", category: "厌恶", prompt: "让图中的人物表情变成厌恶的表情" },
+    { id: "portrait-7", image: "/figma-designs/portrait/IMAGE-7.jpg", afterImage: "/figma-designs/portrait/IMAGE-7-after.png", category: "愤怒", prompt: "让图中的人物表情变成愤怒的表情" },
+    { id: "portrait-8", image: "/figma-designs/portrait/IMAGE-8.jpg", afterImage: "/figma-designs/portrait/IMAGE-8-after.png", category: "惊讶", prompt: "让图中的人物表情变成惊讶" },
+	{ id: "portrait-9", image: "/figma-designs/portrait/IMAGE-9.jpg", afterImage: "/figma-designs/portrait/IMAGE-9-after.png", category: "失望", prompt: "让图中的人物表情变成失望" }
   ],
   artistic: [
-    { id: "artistic-1", image: "/figma-designs/artistic/IMAGE-1.png", category: "artistic", prompt: "oil painting style, artistic masterpiece, classical art technique" },
-    { id: "artistic-2", image: "/figma-designs/artistic/IMAGE-2.png", category: "artistic", prompt: "watercolor painting, soft brushstrokes, artistic expression" },
-    { id: "artistic-3", image: "/figma-designs/artistic/IMAGE-3.png", category: "artistic", prompt: "digital art style, modern artistic interpretation, vibrant colors" },
-    { id: "artistic-4", image: "/figma-designs/artistic/IMAGE-4.png", category: "artistic", prompt: "impressionist style, artistic brushwork, beautiful composition" },
-    { id: "artistic-5", image: "/figma-designs/artistic/IMAGE-5.png", category: "artistic", prompt: "pop art style, bold colors, contemporary artistic approach" },
-    { id: "artistic-6", image: "/figma-designs/artistic/IMAGE-6.png", category: "artistic", prompt: "renaissance style, classical art, detailed artistic work" },
-    { id: "artistic-7", image: "/figma-designs/artistic/IMAGE-7.png", category: "artistic", prompt: "abstract art style, creative interpretation, unique artistic vision" },
-    { id: "artistic-8", image: "/figma-designs/artistic/IMAGE-8.png", category: "artistic", prompt: "mixed media art, experimental style, innovative artistic technique" }
-  ],
+    { id: "artistic-1", image: "/figma-designs/artistic/IMAGE-1.png", afterImage: "/figma-designs/artistic/IMAGE-1-after.png", category: "去除痘痕", prompt: "去掉图中人物脸上的青春痘或雀斑" },
+    { id: "artistic-2", image: "/figma-designs/artistic/IMAGE-2.jpg", afterImage: "/figma-designs/artistic/IMAGE-2-after.png", category: "摘掉眼镜", prompt: "去掉图中人物眼睛上眼镜" },
+    { id: "artistic-3", image: "/figma-designs/artistic/IMAGE-3.jpg", afterImage: "/figma-designs/artistic/IMAGE-3-after.png", category: "去除纹身", prompt: "去掉图中的人物身上所有的纹身痕迹" },
+    { id: "artistic-4", image: "/figma-designs/artistic/IMAGE-4.jpg", afterImage: "/figma-designs/artistic/IMAGE-4-after.png", category: "刮胡子",   prompt: "去除图中男人脸上的胡子" },
+    { id: "artistic-5", image: "/figma-designs/artistic/IMAGE-5.jpg", afterImage: "/figma-designs/artistic/IMAGE-5-after.png", category: "去除皱纹", prompt: "去除图中人物脸上的皱纹，使人物变得更年轻" },
+    { id: "artistic-6", image: "/figma-designs/artistic/IMAGE-6.jpg", afterImage: "/figma-designs/artistic/IMAGE-6-after.png", category: "变瘦",     prompt: "Make the characters in the picture thinner 50%, and looks like more symmetrical" },
+    { id: "artistic-7", image: "/figma-designs/artistic/IMAGE-7.png", afterImage: "/figma-designs/artistic/IMAGE-7-after.png", category: "肌肉感",    prompt: "让图中的人物显得非常有肌肉感" },
+    { id: "artistic-8", image: "/figma-designs/artistic/IMAGE-8.jpg", afterImage: "/figma-designs/artistic/IMAGE-8-after.png", category: "修复破损", prompt: "修复破损的照片，并保持颜色与原照片一致" },
+	{ id: "artistic-9", image: "/figma-designs/artistic/IMAGE-9.jpg", afterImage: "/figma-designs/artistic/IMAGE-9-after.png", category: "照片上色", prompt: "给老照片上色，保持光线正常" }  ],
   anime: [
-    { id: "anime-1", image: "/figma-designs/anime/IMAGE-1.png", category: "anime", prompt: "anime style illustration, manga character design, Japanese animation style" },
-    { id: "anime-2", image: "/figma-designs/anime/IMAGE-2.png", category: "anime", prompt: "kawaii anime style, cute character design, soft pastel colors" },
-    { id: "anime-3", image: "/figma-designs/anime/IMAGE-3.png", category: "anime", prompt: "realistic anime style, detailed character art, high quality illustration" },
-    { id: "anime-4", image: "/figma-designs/anime/IMAGE-4.png", category: "anime", prompt: "chibi anime style, super deformed character, adorable design" },
-    { id: "anime-5", image: "/figma-designs/anime/IMAGE-5.png", category: "anime", prompt: "shounen anime style, dynamic character design, energetic pose" },
-    { id: "anime-6", image: "/figma-designs/anime/IMAGE-6.png", category: "anime", prompt: "shoujo anime style, elegant character design, beautiful aesthetics" },
-    { id: "anime-7", image: "/figma-designs/anime/IMAGE-7.png", category: "anime", prompt: "cyberpunk anime style, futuristic character design, neon colors" },
-    { id: "anime-8", image: "/figma-designs/anime/IMAGE-8.png", category: "anime", prompt: "fantasy anime style, magical character design, mystical atmosphere" }
+    { id: "anime-1", originalImage1: "/figma-designs/anime/IMAGE-1-source1.png", originalImage2: "/figma-designs/anime/IMAGE-1-source2.jpg", mergedImage: "/figma-designs/anime/IMAGE-1-after.png", category: "亲吻", prompt: "让两张图片中的人物拥抱亲吻，两人相对镜头均侧脸，请确保两人的身体比例协调、真实，姿势自然，场景户外，光线自然柔和" },
+    { id: "anime-2", originalImage1: "/figma-designs/anime/IMAGE-2-source1.jpg", originalImage2: "/figma-designs/anime/IMAGE-2-source2.jpg", mergedImage: "/figma-designs/anime/IMAGE-2-after.png", category: "合影", prompt: "让两张图片中的人物合影，请确保两人的身体比例协调、真实，户外场景，光线柔和自然" },
+    { id: "anime-3", originalImage1: "/figma-designs/anime/IMAGE-3-source1.jpg", originalImage2: "/figma-designs/anime/IMAGE-3-source2.jpg", mergedImage: "/figma-designs/anime/IMAGE-3-after.png", category: "搂抱", prompt: "将两张图片中的人物进行合影，要求男的从后面搂抱着女的，侧身面对镜头，请确保两人的身体比例协调、真实，户外场景，光线柔和自然" },
+    { id: "anime-4", originalImage1: "/figma-designs/anime/IMAGE-4-source1.png", originalImage2: "/figma-designs/anime/IMAGE-4-source2.jpg", mergedImage: "/figma-designs/anime/IMAGE-4-after.png", category: "牵手侧面", prompt: "将两张图片中的人物进行合影，要求两人间隔一定的距离牵手，两人相对镜头侧向，相互面对着微笑，请确保两人的身体比例协调、真实，姿势自然，户外场景，光线柔和自然" },
+    { id: "anime-5", originalImage1: "/figma-designs/anime/IMAGE-5-source1.png", originalImage2: "/figma-designs/anime/IMAGE-5-source2.jpg", mergedImage: "/figma-designs/anime/IMAGE-5-after.png", category: "牵手正面", prompt: "将两张图片中的人物进行合影，要求两人间隔一定的距离牵手，面对镜头微笑，请确保两人的身体比例协调、真实，姿势自然，户外场景，光线柔和自然" },
+    { id: "anime-6", originalImage1: "/figma-designs/anime/IMAGE-6-source1.png", originalImage2: "/figma-designs/anime/IMAGE-6-source2.jpg", mergedImage: "/figma-designs/anime/IMAGE-6-after.png", category: "抱起相视", prompt: "融合两张图的色彩方案创造和谐的动漫图像" },
+    { id: "anime-7", originalImage1: "/figma-designs/anime/IMAGE-7-source1.jpg", originalImage2: "/figma-designs/anime/IMAGE-7-source2.jpg", mergedImage: "/figma-designs/anime/IMAGE-7-after.png", category: "背对而坐", prompt: "将不同时空的动漫元素合并到同一画面" },
+    { id: "anime-8", originalImage1: "/figma-designs/anime/IMAGE-8-source1.jpg", originalImage2: "/figma-designs/anime/IMAGE-8-source2.png", mergedImage: "/figma-designs/anime/IMAGE-8-after.png", category: "求婚", prompt: "将两张图片中的人物进行合影，要求男人单膝跪地向女人做出求婚的姿势，两人侧向镜头，都面带微笑，请确保两人的身体比例协调、真实，姿势自然，户外场景，光线柔和自然" }
+  ],
+  wearing: [
+    { id: "wearing-1", originalImage1: "/figma-designs/wearing/IMAGE-1-source1.png", originalImage2: "/figma-designs/wearing/IMAGE-1-source2.png", mergedImage: "/figma-designs/wearing/IMAGE-1-after.png", category: "项链", prompt: "给其中一张有人脸的图佩戴上项链，项链采用另一张图中的款式，并保持项链与有人脸的图光线一致，让项链看起来很自然地戴在人的脖子上" },
+    { id: "wearing-2", originalImage1: "/figma-designs/wearing/IMAGE-2-source1.jpg", originalImage2: "/figma-designs/wearing/IMAGE-2-source2.png", mergedImage: "/figma-designs/wearing/IMAGE-2-after.png", category: "耳环", prompt: "给其中一张有人脸的图佩戴上耳环，耳环采用另一张图中的款式，并保持耳环与有人脸的图光线一致，让耳环看起来很自然地戴在人的耳朵上" },
+    { id: "wearing-3", originalImage1: "/figma-designs/wearing/IMAGE-3-source1.jpg", originalImage2: "/figma-designs/wearing/IMAGE-3-source2.png", mergedImage: "/figma-designs/wearing/IMAGE-3-after.png", category: "眼镜", prompt: "给其中一张有人脸的图佩戴上眼镜，眼镜采用另一张图中的款式，并保持眼镜与有人脸的图光线一致，让眼镜看起来很自然地戴在人脸上" },
+    { id: "wearing-4", originalImage1: "/figma-designs/wearing/IMAGE-4-source1.jpg", originalImage2: "/figma-designs/wearing/IMAGE-4-source2.png", mergedImage: "/figma-designs/wearing/IMAGE-4-after.png", category: "唇膏", prompt: "给其中一张图的女人嘴唇涂上口红，口红采用另一张图中的颜色" },
+    { id: "wearing-5", originalImage1: "/figma-designs/wearing/IMAGE-5-source1.jpg", originalImage2: "/figma-designs/wearing/IMAGE-5-source2.png", mergedImage: "/figma-designs/wearing/IMAGE-5-after.png", category: "帽子", prompt: "给其中一张有人脸的图佩戴上帽子，帽子采用另一张图中的款式，并保持帽子与有人脸的图光线一致，让帽子看起来很自然地戴在人头上" },
+    { id: "wearing-6", originalImage1: "/figma-designs/wearing/IMAGE-6-source1.jpg", originalImage2: "/figma-designs/wearing/IMAGE-6-source2.png", mergedImage: "/figma-designs/wearing/IMAGE-6-after.png", category: "衣服", prompt: "给其中一张有人脸的图换上另一件衣服，另一件采用另一张图中的款式，并保持衣服与有人脸的图光线一致，让衣服看起来很自然地穿在人身上" },
+    { id: "wearing-7", originalImage1: "/figma-designs/wearing/IMAGE-7-source1.jpg", originalImage2: "/figma-designs/wearing/IMAGE-7-source2.png", mergedImage: "/figma-designs/wearing/IMAGE-7-after.png", category: "裤子", prompt: "给其中一张有人脸的图换上另一条裤子，裤子采用另一张图中的款式，并保持裤子与有人脸的图光线一致，让裤子看起来很自然地穿在人身上" },
+    { id: "wearing-8", originalImage1: "/figma-designs/wearing/IMAGE-8-source1.jpg", originalImage2: "/figma-designs/wearing/IMAGE-8-source2.png", mergedImage: "/figma-designs/wearing/IMAGE-8-after.png", category: "鞋 ", prompt: "给其中一张图中的人的脚上换一双鞋子，鞋子采用另一张图中的款式，并保持鞋子与有周边的图光线一致，让鞋子看起来很自然地穿在人脚上" }
   ],
   landscape: [
-    { id: "landscape-1", image: "/figma-designs/landscape/IMAGE-1.png", category: "landscape", prompt: "mountain landscape, majestic peaks, natural beauty, panoramic view" },
-    { id: "landscape-2", image: "/figma-designs/landscape/IMAGE-2.png", category: "landscape", prompt: "ocean scenery, peaceful waves, coastal landscape, serene atmosphere" },
-    { id: "landscape-3", image: "/figma-designs/landscape/IMAGE-3.png", category: "landscape", prompt: "forest landscape, lush greenery, nature photography, tranquil scene" },
-    { id: "landscape-4", image: "/figma-designs/landscape/IMAGE-4.png", category: "landscape", prompt: "urban cityscape, modern architecture, city lights, metropolitan view" },
-    { id: "landscape-5", image: "/figma-designs/landscape/IMAGE-5.png", category: "landscape", prompt: "sunset landscape, golden hour, warm lighting, romantic atmosphere" },
-    { id: "landscape-6", image: "/figma-designs/landscape/IMAGE-6.png", category: "landscape", prompt: "winter landscape, snow covered, peaceful winter scene, cold beauty" },
-    { id: "landscape-7", image: "/figma-designs/landscape/IMAGE-7.png", category: "landscape", prompt: "desert landscape, vast dunes, arid beauty, dramatic sky" },
-    { id: "landscape-8", image: "/figma-designs/landscape/IMAGE-8.png", category: "landscape", prompt: "countryside landscape, rural beauty, pastoral scene, peaceful environment" }
+    { id: "landscape-1", image: "/figma-designs/landscape/IMAGE-1.png", afterImage: "/figma-designs/landscape/IMAGE-1-after.png", category: "山景", prompt: "将图片背景替换为壮观的山景，保持人物不变，添加自然光照效果" },
+    { id: "landscape-2", image: "/figma-designs/landscape/IMAGE-2.png", afterImage: "/figma-designs/landscape/IMAGE-2-after.png", category: "海景", prompt: "将图片背景替换为美丽的海景，保持人物不变，添加海风和自然光照效果" },
+    { id: "landscape-3", image: "/figma-designs/landscape/IMAGE-3.png", afterImage: "/figma-designs/landscape/IMAGE-3-after.png", category: "森林", prompt: "将图片背景替换为茂密的森林景观，保持人物不变，添加自然绿色光照" },
+    { id: "landscape-4", image: "/figma-designs/landscape/IMAGE-4.png", afterImage: "/figma-designs/landscape/IMAGE-4-after.png", category: "城市", prompt: "将图片背景替换为现代城市景观，保持人物不变，添加城市灯光效果" },
+    { id: "landscape-5", image: "/figma-designs/landscape/IMAGE-5.png", afterImage: "/figma-designs/landscape/IMAGE-5-after.png", category: "日落", prompt: "将图片背景替换为美丽的日落景色，保持人物不变，添加温暖的黄金时刻光照" },
+    { id: "landscape-6", image: "/figma-designs/landscape/IMAGE-6.png", afterImage: "/figma-designs/landscape/IMAGE-6-after.png", category: "田园", prompt: "将图片背景替换为宁静的田园风光，保持人物不变，添加自然柔和光照" },
+    { id: "landscape-7", image: "/figma-designs/landscape/IMAGE-7.png", afterImage: "/figma-designs/landscape/IMAGE-7-after.png", category: "星空", prompt: "将图片背景替换为美丽的星空夜景，保持人物不变，添加夜晚光照效果" },
+    { id: "landscape-8", image: "/figma-designs/landscape/IMAGE-8.png", afterImage: "/figma-designs/landscape/IMAGE-8-after.png", category: "沙漠", prompt: "将图片背景替换为广阔的沙漠景观，保持人物不变，添加沙漠特有的光照效果" }
   ],
   abstract: [
     { id: "abstract-1", image: "/figma-designs/abstract/IMAGE-1.png", category: "abstract", prompt: "abstract geometric patterns, modern design, colorful composition" },
@@ -118,7 +135,7 @@ const VIDEO_TEMPLATE_DATA = {
     { id: "effects-5", thumbnail: "/figma-designs/videos/effects/rain-frame1.png", video: "/figma-designs/videos/effects/rain.mp4", category: "切换到雨天", prompt: "将视频从第2秒开始由当前天气切换到下雨天" },
     { id: "effects-6", thumbnail: "/figma-designs/videos/effects/sunset-frame1.png", video: "/figma-designs/videos/effects/sunset.mp4", category: "切换到日落", prompt: "背景切换到日落" },
     { id: "effects-7", thumbnail: "/figma-designs/videos/effects/ocean-frame1.png", video: "/figma-designs/videos/effects/ocean.mp4", category: "切换到海洋", prompt: "change the video background to deep ocean underwater scene" },
-    { id: "effects-8", thumbnail: "/figma-designs/videos/effects/space-frame1.png", video: "/figma-designs/videos/effects/space.mp4", category: "切换到太空", prompt: "change the video background to outer space with stars and galaxies" },
+    { id: "effects-8", thumbnail: "/figma-designs/videos/effects/space-frame1.jpg", video: "/figma-designs/videos/effects/space.mp4", category: "切换到太空", prompt: "change the video background to outer space with stars and galaxies" },
     { id: "effects-9", thumbnail: "/figma-designs/videos/effects/forest-frame1.png", video: "/figma-designs/videos/effects/forest.mp4", category: "切换到森林", prompt: "change the video background to dense mystical forest scene" },
     { id: "effects-10", thumbnail: "/figma-designs/videos/effects/citynight-frame1.png", video: "/figma-designs/videos/effects/citynight.mp4", category: "切换到都市夜景", prompt: "change the video background to city night scene with neon lights" },
     { id: "effects-11", thumbnail: "/figma-designs/videos/effects/mountain-frame1.png", video: "/figma-designs/videos/effects/mountain.mp4", category: "切换到高山", prompt: "change the video background to majestic mountain peaks with clouds" },
@@ -141,9 +158,9 @@ const VIDEO_TEMPLATE_DATA = {
     { id: "animation-2", thumbnail: "/figma-designs/videos/animation/replace_face_orign-frame1.png", video: "/figma-designs/videos/animation/replace_face_orign.mp4", category: "videoAnimation", prompt: "3D animation sequence, realistic motion, professional quality" }
   ],
   fantasy: [
-    { id: "fantasy-1", thumbnail: "/figma-designs/videos/fantasy/thumbnail-1.jpg", video: "/figma-designs/videos/fantasy/video-1.mp4", category: "videoFantasy", prompt: "magical fantasy world, enchanted forest, mystical creatures" },
-    { id: "fantasy-2", thumbnail: "/figma-designs/videos/fantasy/thumbnail-2.jpg", video: "/figma-designs/videos/fantasy/video-2.mp4", category: "videoFantasy", prompt: "dragon flying through clouds, epic fantasy scene, majestic creatures" },
-    { id: "fantasy-3", thumbnail: "/figma-designs/videos/fantasy/thumbnail-3.jpg", video: "/figma-designs/videos/fantasy/video-3.mp4", category: "videoFantasy", prompt: "underwater kingdom, mermaids and sea creatures, aquatic fantasy" },
+    { id: "fantasy-1", thumbnail: "/figma-designs/videos/fantasy/thumbnail-1.jpg", video: "/figma-designs/videos/fantasy/video-1.mp4", category: "生成火球", prompt: "generate magical fire balls floating around the subject, mystical fire magic effects, fantasy flame elements, cinematic lighting" },
+    { id: "fantasy-2", thumbnail: "/figma-designs/videos/fantasy/thumbnail-2.jpg", video: "/figma-designs/videos/fantasy/video-2.mp4", category: "爆炸", prompt: "create dramatic explosion effects in the video scene, dynamic blast effects, cinematic destruction", fixedImage: "/figma-designs/videos/fantasy/thumbnail-2.jpg" },
+    { id: "fantasy-3", thumbnail: "/figma-designs/videos/fantasy/thumbnail-3.jpg", video: "/figma-designs/videos/fantasy/video-3.mp4", category: "老照片动起来", prompt: "bring the photo to life with subtle realistic movements, gentle animation effects, make the scene come alive naturally, cinematic quality", imageToVideo: true },
     { id: "fantasy-4", thumbnail: "/figma-designs/videos/fantasy/thumbnail-4.jpg", video: "/figma-designs/videos/fantasy/video-4.mp4", category: "videoFantasy", prompt: "floating islands in the sky, aerial fantasy landscape, dreamy atmosphere" },
     { id: "fantasy-5", thumbnail: "/figma-designs/videos/fantasy/thumbnail-5.jpg", video: "/figma-designs/videos/fantasy/video-5.mp4", category: "videoFantasy", prompt: "crystal cave with glowing gems, magical underground world, ethereal lighting" },
     { id: "fantasy-6", thumbnail: "/figma-designs/videos/fantasy/thumbnail-6.jpg", video: "/figma-designs/videos/fantasy/video-6.mp4", category: "videoFantasy", prompt: "wizard casting spells, magical energy bursts, arcane power display" },
@@ -224,14 +241,15 @@ const VIDEO_TEMPLATE_DATA = {
 export default function GeneratePage() {
   const [selectedTemplate, setSelectedTemplate] = useState<FigmaTemplate | null>(null);
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
+  const [uploadedImage1, setUploadedImage1] = useState<File | null>(null); // 动漫合成第一张图
+  const [uploadedImage2, setUploadedImage2] = useState<File | null>(null); // 动漫合成第二张图
   const [uploadedVideo, setUploadedVideo] = useState<File | null>(null);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<string>("openai");
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string>("");
   const [showModal, setShowModal] = useState(false);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<keyof typeof TEMPLATE_DATA>("portrait");
+  const [selectedCategory, setSelectedCategory] = useState<keyof typeof TEMPLATE_DATA>("expression");
   const [selectedVideoCategory, setSelectedVideoCategory] = useState<keyof typeof VIDEO_TEMPLATE_DATA>("effects");
   const [selectedVideoTemplate, setSelectedVideoTemplate] = useState<VideoTemplate | null>(null);
   const [generationType, setGenerationType] = useState<'image' | 'shortvideo' | 'longvideo'>('image'); // 新增：生成类型
@@ -299,7 +317,7 @@ export default function GeneratePage() {
 
   // 监听角色迁移任务完成
   useEffect(() => {
-    if (!currentJobId || currentJobId === "generating" || !faceSwapResult) return;
+    if (!currentJobId || currentJobId === "generating" || !faceSwapResult || !faceSwapResult.originalVideo) return;
 
     console.log("🔍 Starting face swap result monitoring for job:", currentJobId);
 
@@ -332,12 +350,12 @@ export default function GeneratePage() {
                 swappedVideo: currentJob.result_url
               } : null);
               setShowFaceSwapResult(true);
-              setShowModal(false); // 关闭生成进度弹窗
+              // setShowModal(false); // 关闭生成进度弹窗 - 不自动关闭，让用户手动关闭
               return true; // 表示任务已完成，停止监听
             } else if (currentJob.status === 'failed') {
               console.error("❌ Face swap failed: Unknown error");
               alert("角色迁移失败，请重试");
-              setShowModal(false);
+              // setShowModal(false); // 不自动关闭，让用户手动关闭
               return true; // 停止监听
             }
           } else {
@@ -377,14 +395,15 @@ export default function GeneratePage() {
       }
     };
   }, [currentJobId, faceSwapResult]);
-  const { hasPendingTasks, pendingCount, pendingJobs } = usePendingTasks();
-  const { 
-    totalImageGenerations, 
+  const { hasPendingTasks, pendingCount, pendingJobs, clearPendingJobs, refreshPendingJobs } = usePendingTasks();
+  const {
+    totalImageGenerations,
     totalVideoGenerations,
     imageQuota,
     videoQuota,
     remainingImageGenerations,
     remainingVideoGenerations,
+    remainingCredits,
     planName
   } = useUserStats();
   const router = useRouter();
@@ -986,7 +1005,7 @@ export default function GeneratePage() {
         const errorMessage = error instanceof Error ? error.message : "未知错误";
         alert(`长视频生成失败: ${errorMessage}`);
         setIsGenerating(false);
-        setShowModal(false);
+        // setShowModal(false); // 不自动关闭，让用户手动关闭
       }
     };
     
@@ -1017,15 +1036,35 @@ export default function GeneratePage() {
   });
 
   const handleTemplateClick = (template: FigmaTemplate) => {
+    // 只有在切换不同模板时才清空图片状态
+    if (selectedTemplate?.id !== template.id) {
+      // 清除图片状态，避免不同模板间的状态混淆
+      setUploadedImage(null);
+      setUploadedImage1(null);
+      setUploadedImage2(null);
+    }
+
     setSelectedTemplate(template);
     setSelectedVideoTemplate(null); // 清除视频模板选择
     setShowUploadDialog(true);
   };
 
   const handleVideoTemplateClick = (template: VideoTemplate) => {
+    console.log("🎥 Video template clicked:", template.category, "selectedVideoCategory:", selectedVideoCategory);
+    
+    // 只有在切换不同模板时才清空文件状态
+    if (selectedVideoTemplate?.id !== template.id) {
+      // 清除文件状态，避免不同模板间的状态混淆
+      setUploadedImage(null);
+      setUploadedVideo(null);
+      setVideoDuration(null);
+    }
+
     setSelectedVideoTemplate(template);
     setSelectedTemplate(null); // 清除图片模板选择
     setShowUploadDialog(true);
+    
+    console.log("🎥 After template click - generationType:", 'shortvideo', "selectedVideoCategory:", selectedVideoCategory);
   };
 
   const handleGenerate = async () => {
@@ -1033,20 +1072,44 @@ export default function GeneratePage() {
     const currentTemplate = generationType === 'image' ? selectedTemplate : selectedVideoTemplate;
     
     // 检查上传文件
-    if (generationType === 'image' && (!currentTemplate || !uploadedImage)) {
-      alert("请选择模板和上传人像照片");
-      return;
+    if (generationType === 'image') {
+      if (!currentTemplate) {
+        alert("请选择模板");
+        return;
+      }
+
+      // 动漫类别和穿戴类别检查两张图片
+      if ((selectedCategory === 'anime' || selectedCategory === 'wearing') && (!uploadedImage1 || !uploadedImage2)) {
+        const message = selectedCategory === 'anime' ? "请上传两张原始图片进行合成" :
+                       "请上传两张图片进行穿戴搭配";
+        alert(message);
+        return;
+      }
+      // 其他类别检查单张图片
+      if (selectedCategory !== 'anime' && selectedCategory !== 'wearing' && !uploadedImage) {
+        alert("请选择模板和上传人像照片");
+        return;
+      }
     }
     
     if (generationType === 'shortvideo') {
-      // 对于特效类别，需要上传视频；其他类别上传图片
-      const isEffectsCategory = selectedVideoCategory === 'effects';
-      const requiredFile = isEffectsCategory ? uploadedVideo : uploadedImage;
-      const requiredFileType = isEffectsCategory ? "视频" : "参考图片";
-      
-      if (!currentTemplate || !requiredFile) {
-        alert(`请选择视频模板和上传${requiredFileType}`);
-        return;
+      // 检查是否为图片转视频模式
+      if (currentTemplate?.imageToVideo) {
+        // 图片转视频需要图片文件
+        if (!uploadedImage) {
+          alert("请上传一张照片进行视频生成");
+          return;
+        }
+      } else {
+        // 对于特效和奇幻类别，需要上传视频；其他类别上传图片
+        const needsVideo = selectedVideoCategory === 'effects' || selectedVideoCategory === 'fantasy';
+        const requiredFile = needsVideo ? uploadedVideo : uploadedImage;
+        const requiredFileType = needsVideo ? "视频" : "参考图片";
+        
+        if (!currentTemplate || !requiredFile) {
+          alert(`请选择视频模板和上传${requiredFileType}`);
+          return;
+        }
       }
     }
     
@@ -1057,34 +1120,73 @@ export default function GeneratePage() {
 
     setIsGenerating(true);
     setShowUploadDialog(false);
-    
-    // 🔥 立即显示弹窗，让用户看到"正在生成..."状态
+
+    // 立即显示对话框，使用临时ID
+    setCurrentJobId("generating");
     setShowModal(true);
-    setCurrentJobId("generating"); // 临时ID，表示正在创建任务
     
     try {
       let referenceUrl = "";
-      
-      if (generationType === 'image' || (generationType === 'shortvideo' && selectedVideoCategory !== 'effects')) {
-        // 上传图片（图像生成或非特效视频生成）
-        console.log("📁 Uploading reference image...");
-        const formData = new FormData();
-        formData.append("file", uploadedImage!);
-        
-        const uploadResponse = await fetch("/api/upload/image", {
-          method: "POST",
-          body: formData,
-        });
+      let referenceUrl2 = ""; // 动漫类别的第二张图片
 
-        if (!uploadResponse.ok) {
-          const uploadError = await uploadResponse.json();
-          throw new Error(`图片上传失败: ${uploadError.error}`);
+      if (generationType === 'image' || (generationType === 'shortvideo' && (selectedVideoCategory !== 'effects' && selectedVideoCategory !== 'fantasy')) || (generationType === 'shortvideo' && currentTemplate?.imageToVideo)) {
+        if (generationType === 'image' && (selectedCategory === 'anime' || selectedCategory === 'wearing')) {
+          // 动漫类别和穿戴类别：上传两张图片
+          const categoryName = selectedCategory === 'anime' ? 'anime' : 'wearing';
+          console.log(`📁 Uploading first ${categoryName} image...`);
+          const formData1 = new FormData();
+          formData1.append("file", uploadedImage1!);
+
+          const uploadResponse1 = await fetch("/api/upload/image", {
+            method: "POST",
+            body: formData1,
+          });
+
+          if (!uploadResponse1.ok) {
+            const uploadError1 = await uploadResponse1.json();
+            throw new Error(`第一张图片上传失败: ${uploadError1.error}`);
+          }
+
+          const { url: url1 } = await uploadResponse1.json();
+          referenceUrl = url1;
+
+          console.log(`📁 Uploading second ${categoryName} image...`);
+          const formData2 = new FormData();
+          formData2.append("file", uploadedImage2!);
+
+          const uploadResponse2 = await fetch("/api/upload/image", {
+            method: "POST",
+            body: formData2,
+          });
+
+          if (!uploadResponse2.ok) {
+            const uploadError2 = await uploadResponse2.json();
+            throw new Error(`第二张图片上传失败: ${uploadError2.error}`);
+          }
+
+          const { url: url2 } = await uploadResponse2.json();
+          referenceUrl2 = url2;
+        } else {
+          // 其他类别：上传单张图片
+          console.log("📁 Uploading reference image...");
+          const formData = new FormData();
+          formData.append("file", uploadedImage!);
+
+          const uploadResponse = await fetch("/api/upload/image", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!uploadResponse.ok) {
+            const uploadError = await uploadResponse.json();
+            throw new Error(`图片上传失败: ${uploadError.error}`);
+          }
+
+          const { url } = await uploadResponse.json();
+          referenceUrl = url;
         }
-        
-        const { url } = await uploadResponse.json();
-        referenceUrl = url;
       } else {
-        // 上传视频（特效类别）
+        // 上传视频（特效和奇幻类别）
         console.log("📁 Uploading reference video...");
         const formData = new FormData();
         formData.append("file", uploadedVideo!);
@@ -1108,9 +1210,9 @@ export default function GeneratePage() {
       // 构建生成提示
       let basePrompt;
       if (generationType === 'image' && currentTemplate) {
-        basePrompt = `${currentTemplate.prompt}, based on uploaded portrait, maintain facial features and identity, high quality, professional result`;
+        basePrompt = currentTemplate.prompt;
       } else if (generationType === 'shortvideo' && currentTemplate) {
-        const fileType = selectedVideoCategory === 'effects' ? "video" : "reference image";
+        const fileType = (selectedVideoCategory === 'effects' || (selectedVideoCategory === 'fantasy' && !currentTemplate.imageToVideo)) ? "video" : "reference image";
         basePrompt = `${currentTemplate.prompt}, based on uploaded ${fileType}, create dynamic video content, high quality, professional result`;
       } else {
         basePrompt = "Generate high quality content based on uploaded reference";
@@ -1122,22 +1224,32 @@ export default function GeneratePage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          provider: generationType === 'shortvideo' ? 'runway' : selectedProvider,
+          provider: generationType === 'shortvideo' ? 'runway' : 'gemini',
           type: generationType === 'shortvideo' ? 'video' : generationType,
           prompt: basePrompt,
           referenceImageUrl: referenceUrl,
+          referenceImageUrl2: selectedCategory === 'anime' && generationType === 'image' ? referenceUrl2 : undefined,
           template_id: currentTemplate?.id,
           videoDuration: generationType === 'shortvideo' && selectedVideoCategory === 'effects' ? videoDuration : undefined,
+          fixedImagePath: generationType === 'shortvideo' && 'fixedImage' in currentTemplate ? currentTemplate.fixedImage : undefined,
+          imageToVideo: generationType === 'shortvideo' && currentTemplate?.imageToVideo ? true : undefined,
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        setCurrentJobId(data.id); // 更新为真实的jobId，modal已经显示了
+        setCurrentJobId(data.id);
+
+        // 如果是同步模式且已有结果，弹窗会自动显示完成状态
+        if (data.status === 'done' && data.result_url) {
+          console.log("✅ 同步生成完成，弹窗将显示结果");
+        } else {
+          console.log("⏳ 异步任务已开始，弹窗将显示进度");
+        }
       } else {
         const error = await response.json();
         alert(`生成失败: ${error.error}`);
-        setShowModal(false); // 失败时关闭modal
+        // setShowModal(false); // 不自动关闭，让用户手动关闭 // 失败时关闭modal
       }
     } catch (error) {
       console.error("Generation failed:", error);
@@ -1158,8 +1270,10 @@ export default function GeneratePage() {
 
     setShowFaceSwapModal(false);
     setIsGenerating(true);
-    setShowModal(true);
+
+    // 立即显示对话框，使用临时ID
     setCurrentJobId("generating");
+    setShowModal(true);
 
     try {
       // 上传视频文件
@@ -1251,12 +1365,11 @@ export default function GeneratePage() {
           swappedVideo: result.result_url
         });
         setShowFaceSwapResult(true);
-        setShowModal(false);
+        // setShowModal(false); // 不自动关闭，让用户手动关闭
       } else {
         // 任务还在处理中，需要轮询等待
         console.log("⏳ Face swap job queued, will wait for completion:", result.id);
         setCurrentJobId(result.id || result.jobId);
-        // GenerationModal会处理后续的进度显示
       }
 
     } catch (error) {
@@ -1270,18 +1383,27 @@ export default function GeneratePage() {
 
   const canGenerate = (() => {
     if (generationType === 'longvideo') return longVideoPrompt.trim().length > 0; // 长视频生成需要输入内容
-    
+
     const currentTemplate = generationType === 'image' ? selectedTemplate : selectedVideoTemplate;
     if (!currentTemplate || isGenerating) return false;
-    
+
     if (generationType === 'image') {
+      // 动漫类别和穿戴类别需要两张图片
+      if (selectedCategory === 'anime' || selectedCategory === 'wearing') {
+        return !!(uploadedImage1 && uploadedImage2);
+      }
+      // 其他类别需要一张图片
       return !!uploadedImage;
     } else if (generationType === 'shortvideo') {
-      // 短视频生成：特效类别需要视频文件，其他类别需要图片文件
-      const isEffectsCategory = selectedVideoCategory === 'effects';
-      return isEffectsCategory ? !!uploadedVideo : !!uploadedImage;
+      // 短视频生成：检查是否为特殊的图片转视频模式
+      if (currentTemplate.imageToVideo) {
+        return !!uploadedImage; // 图片转视频需要图片
+      }
+      // 特效和奇幻类别需要视频文件，其他类别需要图片文件
+      const needsVideo = selectedVideoCategory === 'effects' || selectedVideoCategory === 'fantasy';
+      return needsVideo ? !!uploadedVideo : !!uploadedImage;
     }
-    
+
     return false;
   })();
 
@@ -1352,35 +1474,24 @@ export default function GeneratePage() {
                     {planName === 'free' ? t('freeUser') : `${planName.toUpperCase()} 用户`}
                   </Badge>
                 </div>
-                {/* 生成次数统计 */}
-                <div className="text-xs text-gray-600 mt-1 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center">
-                      <Image className="h-3 w-3 mr-1" />
-                      <span>图片生成:</span>
-                    </div>
-                    <span className="font-semibold text-orange-600">
-                      {totalImageGenerations}/{imageQuota} {t('times')}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center">
-                      <Video className="h-3 w-3 mr-1" />
-                      <span>视频生成:</span>
-                    </div>
-                    <span className="font-semibold text-orange-600">
-                      {totalVideoGenerations}/{videoQuota} {t('times')}
-                    </span>
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    剩余: 图片 {remainingImageGenerations} 次，视频 {remainingVideoGenerations} 次
-                  </div>
+                {/* 剩余 Credit */}
+                <div className="text-xs text-gray-600 mt-2">
+                  剩余 Credit: <span className="font-semibold text-orange-600">{remainingCredits}</span>
                 </div>
                 {/* 待处理任务提示 */}
                 {hasPendingTasks && (
-                  <div className="text-xs text-orange-600 mt-2 flex items-center">
-                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
-                    有 {pendingCount} 个任务正在生成中
+                  <div className="text-xs text-orange-600 mt-2 flex items-center justify-between">
+                    <div className="flex items-center">
+                      <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                      有 {pendingCount} 个任务正在生成中
+                    </div>
+                    <button
+                      onClick={clearPendingJobs}
+                      className="text-xs text-gray-500 hover:text-red-500 underline ml-2"
+                      title="清理任务状态"
+                    >
+                      清理
+                    </button>
                   </div>
                 )}
               </div>
@@ -1487,19 +1598,81 @@ export default function GeneratePage() {
                     onClick={() => handleTemplateClick(template)}
                   >
                     <div className="relative overflow-hidden rounded-lg border-2 border-transparent hover:border-orange-500 transition-all duration-300 bg-white shadow-md hover:shadow-lg">
-                      <img
-                        src={template.image}
-                        className="w-full h-96 object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
-                      
-                      {/* 悬停遮罩层 */}
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-300 flex items-end justify-center pb-24">
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                          <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-lg">
-                            <p className="text-sm font-medium text-gray-900">{t('generateSimilar')}</p>
+                      {/* 动漫类别和穿戴类别显示两张原始图和一张合并图 */}
+                      {(selectedCategory === 'anime' || selectedCategory === 'wearing') && 'originalImage1' in template && 'originalImage2' in template && 'mergedImage' in template ? (
+                        <div className="w-full h-96 p-2">
+                          {/* 上方两张原始图 */}
+                          <div className="flex gap-1 h-28">
+                            <div className="flex-1 relative overflow-hidden rounded bg-gray-50 flex items-center justify-center">
+                              <img
+                                src={template.originalImage1}
+                                className="max-w-full max-h-full object-contain"
+                                alt="原始图1"
+                              />
+                            </div>
+                            <div className="flex-1 relative overflow-hidden rounded bg-gray-50 flex items-center justify-center">
+                              <img
+                                src={template.originalImage2}
+                                className="max-w-full max-h-full object-contain"
+                                alt="原始图2"
+                              />
+                            </div>
+                          </div>
+
+                          {/* 箭头指示区域 */}
+                          <div className="relative flex justify-center items-center h-12">
+                            {/* 左侧45度箭头 */}
+                            <div className="absolute left-1/4 top-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                              <svg className="w-10 h-10 text-black transform rotate-45" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M2 10h16l-4-4v3H2v2h12v3l4-4z" strokeWidth="2"/>
+                              </svg>
+                            </div>
+
+                            {/* 右侧45度箭头 */}
+                            <div className="absolute right-1/4 top-1/2 transform translate-x-1/2 -translate-y-1/2">
+                              <svg className="w-10 h-10 text-black transform -rotate-45 scale-x-[-1]" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M2 10h16l-4-4v3H2v2h12v3l4-4z" strokeWidth="2"/>
+                              </svg>
+                            </div>
+                          </div>
+
+                          {/* 下方合并图 */}
+                          <div className="h-52 relative overflow-hidden rounded bg-gray-50 flex items-center justify-center">
+                            <img
+                              src={template.mergedImage}
+                              className="max-w-full max-h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                              alt="合并效果图"
+                            />
                           </div>
                         </div>
-                      </div>
+                      ) : (selectedCategory === 'expression' || selectedCategory === 'artistic') && 'afterImage' in template && template.afterImage ? (
+                        <div className="w-full h-96">
+                          <ImageComparisonSlider
+                            beforeImage={template.image}
+                            afterImage={template.afterImage}
+                            beforeLabel={t('original') || '原图'}
+                            afterLabel={t('aiGenerated') || 'AI生成'}
+                            autoPlay={true}
+                            className="w-full h-full"
+                          />
+                        </div>
+                      ) : (
+                        <>
+                          <img
+                            src={template.image}
+                            className="w-full h-96 object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          
+                          {/* 悬停遮罩层 */}
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-300 flex items-end justify-center pb-24">
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                              <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-lg">
+                                <p className="text-sm font-medium text-gray-900">{t('generateSimilar')}</p>
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      )}
                       
                       {/* 图片信息 */}
                       <div className="p-3">
@@ -1913,13 +2086,19 @@ export default function GeneratePage() {
               </Button>
             </DialogTitle>
             <DialogDescription>
-              {generationType === 'image' 
-                ? t('uploadYourPortrait') 
-                : generationType === 'shortvideo' && selectedVideoCategory === 'effects' 
-                  ? "上传您的参考视频（不超过10秒，MP4格式），AI将基于选择的模板风格生成特效视频"
-                  : generationType === 'shortvideo'
-                    ? t('uploadVideoReference')
-                    : "长视频生成功能即将上线"
+              {generationType === 'image' && selectedCategory === 'anime'
+                ? "上传两张原始图片，AI将为您合成创意的动漫风格图像"
+                : generationType === 'image' && selectedCategory === 'wearing'
+                  ? "上传两张图片：第一张是人物照片，第二张是服装或配饰图片，AI将为您进行智能穿戴搭配"
+                  : generationType === 'shortvideo' && selectedVideoTemplate?.imageToVideo
+                    ? "📸 上传一张照片（JPG/PNG格式），AI将让您的照片动起来，生成精美的动态视频"
+                    : generationType === 'shortvideo' && (selectedVideoCategory === 'effects' || selectedVideoCategory === 'fantasy')
+                      ? "🎬 上传您的参考视频（不超过10秒，MP4格式），AI将基于选择的模板生成专业特效视频"
+                      : generationType === 'image'
+                        ? t('uploadYourPortrait')
+                        : generationType === 'shortvideo'
+                          ? t('uploadVideoReference')
+                          : "长视频生成功能即将上线"
               }
             </DialogDescription>
           </DialogHeader>
@@ -1934,15 +2113,27 @@ export default function GeneratePage() {
               </div>
             )}
             
+            {/* 调试信息 - 开发时可见，生产环境可移除 */}
+            {process.env.NODE_ENV === 'development' && (
+              <div className="text-xs text-gray-500 p-2 bg-gray-50 rounded">
+                Debug: generationType={generationType}, selectedVideoCategory={selectedVideoCategory}, 
+                imageToVideo={selectedVideoTemplate?.imageToVideo},
+                shouldShowVideoUpload={generationType === 'shortvideo' && (selectedVideoCategory === 'effects' || selectedVideoCategory === 'fantasy') && !selectedVideoTemplate?.imageToVideo}
+              </div>
+            )}
+            
             {/* 文件上传 */}
             {generationType !== 'longvideo' && (
               <div>
-                {generationType === 'image' || (generationType === 'shortvideo' && selectedVideoCategory !== 'effects') ? (
-                  <ImageUpload
-                    onImageSelect={setUploadedImage}
-                    selectedImage={uploadedImage}
+                {/* 动漫类别和穿戴类别使用双图片上传 */}
+                {generationType === 'image' && (selectedCategory === 'anime' || selectedCategory === 'wearing') ? (
+                  <DualImageUpload
+                    onImage1Select={setUploadedImage1}
+                    onImage2Select={setUploadedImage2}
+                    selectedImage1={uploadedImage1}
+                    selectedImage2={uploadedImage2}
                   />
-                ) : (
+                ) : generationType === 'shortvideo' && (selectedVideoCategory === 'effects' || selectedVideoCategory === 'fantasy') && !selectedVideoTemplate?.imageToVideo ? (
                   <VideoUpload
                     onVideoSelect={(file, duration) => {
                       setUploadedVideo(file);
@@ -1950,30 +2141,15 @@ export default function GeneratePage() {
                     }}
                     selectedVideo={uploadedVideo}
                   />
-                )}
+                ) : generationType === 'image' || generationType === 'shortvideo' ? (
+                  <ImageUpload
+                    onImageSelect={setUploadedImage}
+                    selectedImage={uploadedImage}
+                  />
+                ) : null}
               </div>
             )}
 
-            {/* AI 引擎选择 */}
-            {generationType === 'image' && (
-              <div>
-                <label className="text-sm font-medium mb-2 block">
-                  {t('chooseAIEngine')}
-                </label>
-                <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="openai">OpenAI DALL-E 3</SelectItem>
-                    <SelectItem value="ideogram">Ideogram 3.0</SelectItem>
-                    <SelectItem value="gemini" disabled>
-                      Gemini (即将推出)
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
 
 
             {/* 生成按钮 */}
@@ -1999,6 +2175,16 @@ export default function GeneratePage() {
               <p className="text-sm text-gray-500 text-center">
                 {(() => {
                   if (generationType === 'image') {
+                    if (selectedCategory === 'anime' || selectedCategory === 'wearing') {
+                      if (!uploadedImage1 && !uploadedImage2) {
+                        return selectedCategory === 'anime' ? "请上传两张原始图片进行合成" : "请上传两张图片进行穿戴搭配";
+                      } else if (!uploadedImage1) {
+                        return "请上传第一张原始图片";
+                      } else if (!uploadedImage2) {
+                        return "请上传第二张原始图片";
+                      }
+                      return "";
+                    }
                     return !uploadedImage ? t('pleaseUploadPhoto') : "";
                   } else if (generationType === 'shortvideo') {
                     const isEffectsCategory = selectedVideoCategory === 'effects';

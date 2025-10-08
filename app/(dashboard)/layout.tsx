@@ -13,14 +13,14 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { signOut } from '@/app/(login)/actions';
 import { useRouter } from 'next/navigation';
-import { User } from '@/lib/db/schema';
+import { User } from '@supabase/supabase-js';
 import useSWR, { mutate } from 'swr';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 function UserMenu() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { data: user } = useSWR<User>('/api/user', fetcher);
+  const { data: user } = useSWR<any>('/api/user', fetcher);
   const router = useRouter();
 
   async function handleSignOut() {
@@ -53,7 +53,7 @@ function UserMenu() {
           <AvatarFallback>
             {user.email
               .split(' ')
-              .map((n) => n[0])
+              .map((n: string) => n[0])
               .join('')}
           </AvatarFallback>
         </Avatar>
