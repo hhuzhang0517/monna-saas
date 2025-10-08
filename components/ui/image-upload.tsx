@@ -46,6 +46,8 @@ export function ImageUpload({ onImageSelect, selectedImage, className }: ImageUp
         onImageSelect(file);
       }
     }
+    // 清空input value，允许重复选择相同文件
+    e.target.value = '';
   };
 
   const onButtonClick = () => {

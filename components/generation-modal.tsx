@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -35,10 +35,16 @@ interface JobData {
 export function GenerationModal({ isOpen, onClose, jobId, templateName, generationType = 'image' }: GenerationModalProps) {
   const [jobData, setJobData] = useState<JobData | null>(null);
   const [progress, setProgress] = useState(0);
+  const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     if (!jobId || !isOpen) return;
-    
+
+    // 重置状态当jobId变化时
+    setJobData(null);
+    setProgress(0);
+
     // 如果是临时的"generating"状态，不需要轮询
     if (jobId === "generating") return;
 
@@ -62,9 +68,9 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
             // 长视频使用实际进度
             setProgress(data.progress || 0);
           } else {
-            // 短视频和图片使用估计进度
-            if (data.status === "queued") setProgress(25);
-            else if (data.status === "processing") setProgress(75);
+            // 短视频和图片使用更详细的估计进度
+            if (data.status === "queued") setProgress(15);
+            else if (data.status === "processing") setProgress(85);
             else if (data.status === "done") setProgress(100);
             else if (data.status === "failed") setProgress(0);
           }
@@ -77,25 +83,93 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
     // 立即执行一次
     pollJob();
 
-    // 如果任务未完成，定期轮询
-    const interval = setInterval(() => {
-      if (jobData?.status === "done" || jobData?.status === "failed") {
-        clearInterval(interval);
-        return;
+    // 简化轮询策略：固定2秒间隔，减少服务器压力
+    const interval = setInterval(async () => {
+      try {
+        let response;
+        if (generationType === 'longvideo') {
+          response = await fetch(`/api/jobs/long-video?jobId=${jobId}`);
+        } else {
+          response = await fetch(`/api/jobs?id=${jobId}`);
+        }
+
+        if (response.ok) {
+          const data: JobData = await response.json();
+
+          // 检查是否完成，如果完成就停止轮询
+          if (data.status === "done" || data.status === "failed") {
+            clearInterval(interval);
+          }
+
+          setJobData(data);
+
+          // 更新进度条
+          if (generationType === 'longvideo') {
+            setProgress(data.progress || 0);
+          } else {
+            if (data.status === "queued") setProgress(15);
+            else if (data.status === "processing") setProgress(85);
+            else if (data.status === "done") setProgress(100);
+            else if (data.status === "failed") setProgress(0);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch job status in interval:", error);
       }
-      pollJob();
-    }, 2000);
+    }, 2000); // 固定2秒间隔
 
     return () => clearInterval(interval);
-  }, [jobId, isOpen, jobData?.status]);
+  }, [jobId, isOpen, generationType]);
 
-  const getStatusText = (status: JobStatus) => {
+  // 图片加载完成时检测尺寸
+  const handleImageLoad = () => {
+    if (imageRef.current) {
+      setImageDimensions({
+        width: imageRef.current.naturalWidth,
+        height: imageRef.current.naturalHeight
+      });
+    }
+  };
+
+  // 判断是否需要缩放显示（垂直分辨率超过2048）
+  const shouldScaleDown = imageDimensions && imageDimensions.height > 2048;
+
+  // 计算预览容器样式
+  const getPreviewContainerStyle = () => {
+    if (!shouldScaleDown) {
+      return {};
+    }
+
+    // 当垂直分辨率超过2048时，整个预览区域缩小到50%
+    return {
+      transform: 'scale(0.5)',
+      transformOrigin: 'top center',
+      maxHeight: '70vh', // 限制最大高度为视口高度的70%
+      overflow: 'hidden',
+      // 减少缩放后的底部空白
+      marginBottom: imageDimensions ? `-${Math.min(imageDimensions.height * 0.25, 300)}px` : '0'
+    };
+  };
+
+  // 计算图片显示样式
+  const getImageDisplayStyle = () => {
+    return {
+      maxWidth: '100%',
+      height: 'auto',
+      display: 'block'
+    };
+  };
+
+  const getStatusText = (status: JobStatus | null | undefined) => {
+    if (!status) {
+      return jobId === "generating" ? "正在创建任务..." : "初始化中...";
+    }
     switch (status) {
       case "queued": return "排队中...";
       case "processing": return "生成中...";
       case "done": return "生成完成！";
       case "failed": return "生成失败";
-      default: return "未知状态";
+      default: return "处理中...";
     }
   };
 
@@ -109,8 +183,9 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
 
   const handleDownload = async () => {
     if (!jobData?.result_url) return;
-    
+
     try {
+      // 下载原始分辨率图片，不受预览缩放影响
       const response = await fetch(jobData.result_url);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -136,6 +211,7 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
     if (navigator.share) {
       try {
         const contentType = (generationType === 'video' || generationType === 'longvideo') ? '视频' : '头像';
+        // 分享原始分辨率图片URL，不受预览缩放影响
         await navigator.share({
           title: `Monna AI 生成的${contentType}`,
           text: `使用 ${templateName} 模板生成的AI${contentType}`,
@@ -193,13 +269,32 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
             </div>
             
             {jobData?.status !== "failed" && (
-              <Progress value={progress} className="w-full" />
+              <div className="w-full space-y-2">
+                <Progress value={progress} className="w-full" />
+                <div className="flex justify-between text-xs text-gray-500">
+                  <span>进度</span>
+                  <span>{Math.round(progress)}%</span>
+                </div>
+              </div>
             )}
           </div>
 
           {/* 预览区域 */}
           <div className="space-y-4">
-            <div className="relative bg-gray-100 rounded-lg shadow-lg" style={{ minHeight: '200px' }}>
+            {shouldScaleDown && (
+              <div className="text-center">
+                <p className="text-xs text-gray-500 bg-blue-50 px-3 py-2 rounded-md">
+                  🔍 超高分辨率图片已缩放至50%显示 (原始: {imageDimensions?.width} × {imageDimensions?.height})
+                </p>
+              </div>
+            )}
+            <div
+              className="relative bg-gray-100 rounded-lg shadow-lg"
+              style={{
+                minHeight: '200px',
+                ...getPreviewContainerStyle()
+              }}
+            >
               {jobData?.status === "done" && jobData.result_url ? (
                 // 生成完成，显示结果
                 (generationType === 'video' || generationType === 'longvideo') ? (
@@ -215,11 +310,16 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
                     您的浏览器不支持视频播放
                   </video>
                 ) : (
-                  <img
-                    src={jobData.result_url}
-                    alt="Generated content"
-                    className="w-full rounded-lg shadow-lg"
-                  />
+                  <div className="rounded-lg">
+                    <img
+                      ref={imageRef}
+                      src={jobData.result_url}
+                      alt="Generated content"
+                      className="w-full rounded-lg shadow-lg"
+                      style={getImageDisplayStyle()}
+                      onLoad={handleImageLoad}
+                    />
+                  </div>
                 )
               ) : (
                 // 生成中或等待中，显示加载状态
@@ -248,9 +348,21 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
                         当前步骤: {jobData.currentStep}
                       </p>
                     )}
-                    {generationType === 'longvideo' && jobData?.progress && (
+                    
+                    {/* 显示当前进度百分比 */}
+                    {progress > 0 && (
                       <p className="text-xs text-gray-400">
-                        进度: {jobData.progress}%
+                        {generationType === 'longvideo' ? 
+                          `进度: ${jobData?.progress || 0}%` : 
+                          `进度: ${Math.round(progress)}%`
+                        }
+                      </p>
+                    )}
+                    
+                    {/* 显示详细状态 */}
+                    {jobData?.status === "processing" && generationType !== 'longvideo' && (
+                      <p className="text-xs text-blue-600 font-medium">
+                        {generationType === 'video' ? "视频处理中..." : "图片渲染中..."}
                       </p>
                     )}
                   </div>

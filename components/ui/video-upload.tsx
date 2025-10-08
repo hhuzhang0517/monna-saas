@@ -183,6 +183,8 @@ export function VideoUpload({
     if (files && files[0]) {
       handleFileSelect(files[0]);
     }
+    // 清空input value，允许重复选择相同文件
+    e.target.value = '';
   };
 
   const handleRemoveVideo = () => {
