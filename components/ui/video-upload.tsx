@@ -4,6 +4,7 @@ import { useState, useRef, useCallback } from "react";
 import { Upload, Video, X, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/lib/contexts/language-context";
 
 interface VideoUploadProps {
   onVideoSelect: (file: File | null, duration?: number) => void;
@@ -16,6 +17,7 @@ export function VideoUpload({
   selectedVideo,
   className
 }: VideoUploadProps) {
+  const { t } = useTranslation();
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string>("");
   const [isChecking, setIsChecking] = useState(false);
@@ -76,27 +78,33 @@ export function VideoUpload({
       
       video.onerror = () => {
         window.URL.revokeObjectURL(video.src);
-        reject(new Error("无法读取视频元数据"));
+        reject(new Error(t('videoAnalysisFailed')));
       };
       
       video.src = URL.createObjectURL(file);
     });
-  }, []);
+  }, [t]);
 
-  const validateVideo = useCallback(async (file: File): Promise<{ 
-    processedFile: File; 
-    error?: string; 
-    info?: { duration: number; needsProcessing: boolean; targetResolution?: any } 
+  const validateVideo = useCallback(async (file: File): Promise<{
+    processedFile: File;
+    error?: string;
+    info?: { duration: number; needsProcessing: boolean; targetResolution?: any }
   }> => {
     // 检查文件类型
     if (!file.type.startsWith('video/')) {
-      return { processedFile: file, error: "请上传视频格式的文件" };
+      return { processedFile: file, error: t('pleaseUploadVideo') };
     }
 
     // 检查文件大小 (64MB = 64 * 1024 * 1024 bytes)
     const maxSize = 64 * 1024 * 1024;
     if (file.size > maxSize) {
-      return { processedFile: file, error: "视频文件大小不能超过64MB" };
+      return { processedFile: file, error: t('videoFileSizeLimit') };
+    }
+
+    // ⚠️ 检查文件是否过小（可能被移动端浏览器压缩）
+    const fileSizeMB = file.size / 1024 / 1024;
+    if (fileSizeMB < 3) {
+      console.warn("⚠️ 视频文件过小:", fileSizeMB.toFixed(2), "MB。移动端浏览器可能已压缩视频，实际时长可能很短");
     }
 
     try {
@@ -108,9 +116,14 @@ export function VideoUpload({
       (file as any).originalDuration = analysis.duration;
       (file as any).needsProcessing = analysis.needsProcessing;
       (file as any).targetResolution = analysis.targetResolution;
-      
-      return { 
-        processedFile: file, 
+
+      // 特别提示：视频时长警告
+      if (analysis.duration < 3) {
+        console.warn("⚠️ 视频时长过短:", analysis.duration, "秒。角色功能需要至少3秒的视频以获得最佳效果");
+      }
+
+      return {
+        processedFile: file,
         info: {
           duration: analysis.duration,
           needsProcessing: analysis.needsProcessing,
@@ -118,9 +131,9 @@ export function VideoUpload({
         }
       };
     } catch (err) {
-      return { processedFile: file, error: "视频分析失败，请重试" };
+      return { processedFile: file, error: t('videoAnalysisFailed') };
     }
-  }, [analyzeVideo]);
+  }, [analyzeVideo, t]);
 
   const [processingInfo, setProcessingInfo] = useState<string>("");
 
@@ -136,22 +149,45 @@ export function VideoUpload({
         onVideoSelect(null);
       } else {
         // 显示处理信息
-        if (info?.needsProcessing) {
-          const messages = [];
-          if (info.duration > 10) {
-            messages.push(`视频时长 ${info.duration.toFixed(1)}s 将被截断为 10s`);
-          }
-          if (info.targetResolution) {
-            messages.push(`分辨率将调整为 ${info.targetResolution.width}x${info.targetResolution.height}`);
-          }
-          setProcessingInfo(messages.join('，'));
+        const messages = [];
+        const fileSizeMB = processedFile.size / 1024 / 1024;
+
+        // 文件大小警告（移动端压缩检测）
+        if (fileSizeMB < 3) {
+          messages.push(`⚠️ 文件大小: ${fileSizeMB.toFixed(2)}MB (可能被浏览器压缩)`);
+        } else {
+          messages.push(`文件大小: ${fileSizeMB.toFixed(2)}MB`);
         }
-        
+
+        if (info?.duration) {
+          // 显示实际视频时长
+          messages.push(`视频时长: ${info.duration.toFixed(1)}秒`);
+
+          if (info.duration > 10) {
+            messages.push(t('videoWillBeTruncated', { duration: info.duration.toFixed(1) }));
+          }
+
+          if (info.duration < 3) {
+            messages.push("⚠️ 视频较短，建议使用3秒以上的视频");
+          }
+        }
+
+        if (info?.targetResolution) {
+          messages.push(t('resolutionWillBeAdjusted', {
+            width: info.targetResolution.width.toString(),
+            height: info.targetResolution.height.toString()
+          }));
+        }
+
+        if (messages.length > 0) {
+          setProcessingInfo(messages.join(' | '));
+        }
+
         const duration = (processedFile as any).duration || 10;
         onVideoSelect(processedFile, duration);
       }
     } catch (err) {
-      setError("文件分析失败，请重试");
+      setError(t('fileAnalysisFailed'));
       onVideoSelect(null);
     } finally {
       setIsChecking(false);
@@ -279,10 +315,10 @@ export function VideoUpload({
             
             <div>
               <p className="text-sm font-medium text-gray-900">
-                {isChecking ? "正在处理视频..." : "点击上传或拖拽视频文件"}
+                {isChecking ? t('processingVideo') : t('clickUploadOrDragVideo')}
               </p>
               <p className="text-xs text-gray-500 mt-2">
-                支持常见视频格式，超过10秒将自动截断，分辨率会自动调整到合适尺寸，大小不超过64MB
+                {t('videoFormatSupport')}
               </p>
             </div>
           </div>

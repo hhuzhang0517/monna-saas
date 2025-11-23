@@ -1,7 +1,6 @@
 import { createSupabaseServer } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
 import { stripe } from '@/lib/payments/stripe';
-import { getTeamForUser } from '@/lib/db/queries';
 import Stripe from 'stripe';
 
 export async function GET(request: NextRequest) {
@@ -10,9 +9,24 @@ export async function GET(request: NextRequest) {
   const sessionId = searchParams.get('session_id');
   console.log('Session ID:', sessionId);
 
+  const getBaseUrl = () => {
+    let baseUrl = process.env.NEXT_PUBLIC_SITE_URL;
+    if (!baseUrl) {
+      const vercelUrl = process.env.VERCEL_URL;
+      if (vercelUrl) {
+        baseUrl = `https://${vercelUrl}`;
+      } else {
+        baseUrl = 'http://localhost:3005';
+      }
+    }
+    return baseUrl.trim().replace(/[\r\n]/g, '').replace(/\/$/, '');
+  };
+
+  const baseUrl = getBaseUrl();
+
   if (!sessionId) {
     console.log('❌ No session ID found, redirecting to pricing');
-    return NextResponse.redirect(new URL('http://localhost:3005/pricing'));
+    return NextResponse.redirect(new URL(`${baseUrl}/pricing`));
   }
 
   try {
@@ -21,7 +35,17 @@ export async function GET(request: NextRequest) {
       expand: ['customer', 'subscription'],
     });
     console.log('✅ Session retrieved successfully');
+    console.log('Session mode:', session.mode);
+    console.log('Payment status:', session.payment_status);
 
+    // 如果是一次性支付（流量包），直接重定向到成功页面
+    if (session.mode === 'payment') {
+      console.log('✅ One-time payment detected, redirecting to success page');
+      console.log('Note: Credits will be added via webhook (checkout.session.completed)');
+      return NextResponse.redirect(new URL(`${baseUrl}/pricing?success=credits_purchased`));
+    }
+
+    // 以下是订阅模式的处理
     if (!session.customer || typeof session.customer === 'string') {
       throw new Error('Invalid customer data from Stripe.');
     }
@@ -53,14 +77,12 @@ export async function GET(request: NextRequest) {
       throw new Error('No product ID found for this subscription.');
     }
 
-    // 创建产品名称到计划键的映射
     const planNameMapping: { [key: string]: string } = {
       '基础档': 'basic',
-      '专业档': 'professional', 
+      '专业档': 'professional',
       '企业档': 'enterprise'
     };
 
-    // 获取计划键，优先使用metadata，然后使用产品名称映射
     const planKey = product.metadata?.plan_key || planNameMapping[product.name] || 'free';
 
     const userId = session.client_reference_id;
@@ -70,12 +92,9 @@ export async function GET(request: NextRequest) {
 
     console.log('Processing checkout success for user ID:', userId);
     const supabase = await createSupabaseServer();
-    
-    // 不需要验证用户，直接查找团队
-    // 因为 userId 来自我们自己的 session，应该是可信的
+
     console.log('Looking up team for user...');
-    
-    // 通过用户ID查找团队（获取第一个团队）
+
     const { data: teamData, error: teamError } = await supabase
       .from('team_members')
       .select(`
@@ -95,18 +114,23 @@ export async function GET(request: NextRequest) {
       console.error('Team lookup failed:', teamError);
       throw new Error('User is not associated with any team.');
     }
-    
-    const team = teamData[0].teams;
+
+    const teamArray = teamData[0].teams as any;
+    const team = Array.isArray(teamArray) ? teamArray[0] : teamArray;
+
+    if (!team || !team.id) {
+      throw new Error('Invalid team data structure.');
+    }
+
     console.log('✅ Found team for user:', team.id);
 
-    // 更新团队订阅信息
     const { error } = await supabase
       .from('teams')
       .update({
         stripe_customer_id: customerId,
         stripe_subscription_id: subscriptionId,
         stripe_product_id: productId,
-        plan_name: planKey,  // 使用统一的计划键而不是产品名称
+        plan_name: planKey,
         subscription_status: subscription.status,
         updated_at: new Date().toISOString()
       })
@@ -116,29 +140,14 @@ export async function GET(request: NextRequest) {
       throw new Error(`Failed to update team subscription: ${error.message}`);
     }
 
-    // 分配信用点给团队
-    const CreditManager = await import('@/lib/credits/credit-manager');
-    const creditSuccess = await CreditManager.CreditManager.allocateSubscriptionCredits({
-      teamId: team.id,
-      planName: planKey,
-    });
+    console.log('✅ Team subscription updated successfully');
+    console.log('✅ Checkout complete, redirecting to generate page');
 
-    if (!creditSuccess) {
-      console.error(`Failed to allocate credits for team ${team.id} with plan ${planKey}`);
-    } else {
-      console.log(`✅ Successfully allocated credits for team ${team.id} with plan ${planKey}`);
-    }
-
-    console.log('✅ Checkout processing completed successfully');
-    
-    // 添加成功标识，前端可以根据此标识刷新缓存
-    const redirectUrl = new URL('http://localhost:3005/dashboard');
-    redirectUrl.searchParams.set('payment_success', 'true');
-    
-    return NextResponse.redirect(redirectUrl);
+    return NextResponse.redirect(new URL(`${baseUrl}/generate?success=true`));
   } catch (error) {
-    console.error('Error handling successful checkout:', error);
-    console.error('Error details:', JSON.stringify(error, null, 2));
-    return NextResponse.redirect(new URL('http://localhost:3005/error'));
+    console.error('❌ Error processing checkout:', error);
+    return NextResponse.redirect(
+      new URL(`${baseUrl}/pricing?error=checkout_failed`)
+    );
   }
 }

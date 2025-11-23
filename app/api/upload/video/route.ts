@@ -67,13 +67,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const fileSizeMB = file.size / 1024 / 1024;
+    const isMobile = req.headers.get('user-agent')?.toLowerCase().includes('mobile') ||
+                     req.headers.get('user-agent')?.toLowerCase().includes('iphone') ||
+                     req.headers.get('user-agent')?.toLowerCase().includes('android');
+
     console.log("📹 Uploading video file:", {
       name: file.name,
-      size: `${(file.size / 1024 / 1024).toFixed(2)}MB`,
+      size: `${fileSizeMB.toFixed(2)}MB`,
       type: file.type,
       needsProcessing,
       targetDuration,
-      targetResolution
+      targetResolution,
+      userAgent: req.headers.get('user-agent')?.substring(0, 100) || 'unknown',
+      isMobile,
+      warning: fileSizeMB < 3 ? '⚠️ 视频文件过小，可能被移动端浏览器压缩或截断' : null
     });
 
     // 读取文件内容
@@ -99,10 +107,32 @@ export async function POST(req: NextRequest) {
     
     // 上传到 Supabase Storage
     const url = await putAndGetUrl(fileName, new Uint8Array(buffer), processedType);
-    
-    console.log("✅ Video uploaded successfully:", url);
 
-    return NextResponse.json({ url });
+    const uploadedSizeMB = buffer.byteLength / 1024 / 1024;
+    const sizeWarning = uploadedSizeMB < 3 ?
+      '⚠️ 警告：视频文件小于3MB，可能被浏览器压缩。实际生成的视频时长可能很短（2-3秒）' : null;
+
+    console.log("✅ Video uploaded successfully:", {
+      url,
+      finalSize: `${uploadedSizeMB.toFixed(2)}MB`,
+      fileName,
+      targetDuration,
+      isMobile,
+      sizeWarning,
+      note: '⚠️ 角色功能将使用视频的完整时长（Act-Two不支持duration参数）'
+    });
+
+    return NextResponse.json({
+      url,
+      metadata: {
+        originalSize: file.size,
+        uploadedSize: buffer.byteLength,
+        targetDuration,
+        isMobile,
+        sizeWarning,
+        note: 'Act-Two will use the full duration of the uploaded video'
+      }
+    });
   } catch (error) {
     console.error("Video upload error:", error);
     return NextResponse.json(

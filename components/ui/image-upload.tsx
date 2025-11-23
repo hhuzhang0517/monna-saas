@@ -4,14 +4,17 @@ import { useState, useRef } from "react";
 import { Upload, X, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/lib/contexts/language-context";
 
 interface ImageUploadProps {
   onImageSelect: (file: File) => void;
   selectedImage?: File | null;
   className?: string;
+  label?: string; // 自定义上传按钮文本
 }
 
-export function ImageUpload({ onImageSelect, selectedImage, className }: ImageUploadProps) {
+export function ImageUpload({ onImageSelect, selectedImage, className, label }: ImageUploadProps) {
+  const { t } = useTranslation();
   const [dragActive, setDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -110,14 +113,14 @@ export function ImageUpload({ onImageSelect, selectedImage, className }: ImageUp
             <div className="mt-4">
               <Button type="button" onClick={onButtonClick}>
                 <Upload className="mr-2 h-4 w-4" />
-                上传人像照片
+                {label || t('uploadPortraitPhoto')}
               </Button>
             </div>
             <p className="mt-2 text-sm text-gray-500">
-              或拖拽图片到此处
+              {t('dragImageHere')}
             </p>
             <p className="text-xs text-gray-400 mt-1">
-              支持 JPG, PNG, WEBP 格式
+              {t('imageFormatSupport')}
             </p>
           </div>
         )}

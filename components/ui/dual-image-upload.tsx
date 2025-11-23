@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 import { Upload, X, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/lib/contexts/language-context";
 
 interface DualImageUploadProps {
   onImage1Select: (image: File | null) => void;
@@ -20,6 +21,7 @@ export function DualImageUpload({
   selectedImage2,
   className
 }: DualImageUploadProps) {
+  const { t } = useTranslation();
   const [dragActive1, setDragActive1] = useState(false);
   const [dragActive2, setDragActive2] = useState(false);
   const inputRef1 = useRef<HTMLInputElement>(null);
@@ -156,10 +158,10 @@ export function DualImageUpload({
               className="mb-1"
             >
               <Upload className="mr-1 h-3 w-3" />
-              上传图片{isFirst ? '1' : '2'}
+              {isFirst ? t('uploadImage1') : t('uploadImage2')}
             </Button>
             <p className="text-xs text-gray-400">
-              拖拽或点击上传
+              {t('dragOrClickUpload')}
             </p>
           </div>
         )}
@@ -170,8 +172,8 @@ export function DualImageUpload({
   return (
     <div className={cn("w-full", className)}>
       <div className="mb-3">
-        <h4 className="text-sm font-medium text-gray-900 mb-1">上传两张原始图片</h4>
-        <p className="text-xs text-gray-500">上传两张图片进行动漫风格合成，支持 JPG, PNG, WEBP 格式</p>
+        <h4 className="text-sm font-medium text-gray-900 mb-1">{t('uploadTwoOriginalImages')}</h4>
+        <p className="text-xs text-gray-500">{t('uploadTwoImagesForAnimeStyle')}</p>
       </div>
 
       <div className="flex gap-4">

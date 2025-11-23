@@ -24,7 +24,7 @@ export function ImageComparisonSlider({
   const [isDragging, setIsDragging] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const animationRef = useRef<number>();
+  const animationRef = useRef<number | undefined>(undefined);
   const directionRef = useRef<'right' | 'left'>('right');
 
   // 自动播放动画

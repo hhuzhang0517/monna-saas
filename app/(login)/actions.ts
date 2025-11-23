@@ -68,7 +68,23 @@ export const signIn = validatedAction(signInSchema, async (data, formData) => {
   // 获取当前已认证的用户
   const { data: { user: currentUserData } } = await supabase.auth.getUser();
   if (currentUserData) {
-    const userWithTeam = await getUserWithTeam(currentUserData.id);
+    let userWithTeam = await getUserWithTeam(currentUserData.id);
+
+    // 如果用户在数据库中不存在，创建用户和团队记录
+    // 这通常发生在邮件确认回调由于 PKCE 错误而未能创建数据库记录的情况
+    if (!userWithTeam) {
+      console.log('[signIn] User exists in auth but not in DB, creating records...');
+      try {
+        const team = await createUserTeam(currentUserData);
+        console.log('[signIn] ✅ User and team created:', team.id);
+        // 重新获取用户和团队信息
+        userWithTeam = await getUserWithTeam(currentUserData.id);
+      } catch (createError) {
+        console.error('[signIn] Failed to create user/team:', createError);
+        // 继续登录流程，即使创建失败
+      }
+    }
+
     if (userWithTeam) {
       await logActivity(userWithTeam.teamId, userWithTeam.id, 'SIGN_IN');
     }
@@ -104,7 +120,13 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
     email,
     password,
     options: {
-      emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`
+      emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`,
+      // 对于邮件确认流程，我们需要使用 pkce flow_type 为 'implicit' 或者直接不使用 PKCE
+      // 但 Supabase 默认会使用 PKCE，这在邮件确认场景下会有问题
+      // 解决方案：让 Supabase 在邮件链接中包含 access_token（使用 query 参数）
+      data: {
+        // 自定义用户元数据（如果需要）
+      }
     }
   });
   
@@ -184,7 +206,7 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
 export async function signOut() {
   const supabase = await createSupabaseServer();
   await supabase.auth.signOut();
-  redirect('/sign-in');
+  redirect('/');
 }
 
 const updatePasswordSchema = z.object({
@@ -307,26 +329,32 @@ export const deleteAccount = validatedActionWithUser(
 
 const updateAccountSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
-  email: z.string().email('Invalid email address')
+  gender: z.string().optional()
 });
 
 export const updateAccount = validatedActionWithUser(
   updateAccountSchema,
   async (data, _, user) => {
-    const { name, email } = data;
+    const { name, gender } = data;
     const supabase = await createSupabaseServer();
     const userWithTeam = await getUserWithTeam(user.id);
 
+    // 构建更新对象
+    const updateData: any = { name };
+    if (gender) {
+      updateData.gender = gender;
+    }
+
     const { error } = await supabase
       .from('profiles')
-      .update({ name, email })
+      .update(updateData)
       .eq('id', user.id);
-    
+
     if (error) {
       console.error('Failed to update account:', error);
       return {
         name,
-        email,
+        gender,
         error: 'Failed to update account. Please try again.'
       };
     }
@@ -335,7 +363,7 @@ export const updateAccount = validatedActionWithUser(
       await logActivity(userWithTeam.teamId, user.id, 'UPDATE_ACCOUNT');
     }
 
-    return { name, success: 'Account updated successfully.' };
+    return { name, gender, success: 'Account updated successfully.' };
   }
 );
 
@@ -451,12 +479,12 @@ export const inviteTeamMember = validatedActionWithUser(
 
 export async function signInWithGoogle() {
   const supabase = await createSupabaseServer();
-  
-  // Use localhost explicitly for development
-  const baseUrl = 'http://localhost:3005';
-  
+
+  // Use production URL from environment variable
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3005';
+
   console.log('🔄 Starting Google OAuth with redirect:', `${baseUrl}/auth/callback`);
-  
+
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
@@ -470,9 +498,7 @@ export async function signInWithGoogle() {
 
   if (error) {
     console.error('Google OAuth error:', error);
-    return {
-      error: 'Failed to sign in with Google. Please try again.'
-    };
+    throw new Error('Failed to sign in with Google. Please try again.');
   }
 
   console.log('🔄 Redirecting to Google OAuth URL:', data.url);
@@ -481,10 +507,10 @@ export async function signInWithGoogle() {
 
 export async function signInWithApple() {
   const supabase = await createSupabaseServer();
-  
-  // Use localhost explicitly for development
-  const baseUrl = 'http://localhost:3005';
-  
+
+  // Use production URL from environment variable
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3005';
+
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'apple',
     options: {
@@ -494,9 +520,7 @@ export async function signInWithApple() {
 
   if (error) {
     console.error('Apple OAuth error:', error);
-    return {
-      error: 'Failed to sign in with Apple. Please try again.'
-    };
+    throw new Error('Failed to sign in with Apple. Please try again.');
   }
 
   redirect(data.url);

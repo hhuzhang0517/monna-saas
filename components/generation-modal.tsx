@@ -30,6 +30,7 @@ interface JobData {
   progress?: number;
   currentStep?: string;
   message?: string;
+  error_message?: string; // 添加错误信息字段
 }
 
 export function GenerationModal({ isOpen, onClose, jobId, templateName, generationType = 'image' }: GenerationModalProps) {
@@ -60,20 +61,41 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
         }
         
         if (response.ok) {
-          const data: JobData = await response.json();
-          setJobData(data);
-          
-          // 更新进度条
-          if (generationType === 'longvideo') {
-            // 长视频使用实际进度
-            setProgress(data.progress || 0);
-          } else {
-            // 短视频和图片使用更详细的估计进度
-            if (data.status === "queued") setProgress(15);
-            else if (data.status === "processing") setProgress(85);
-            else if (data.status === "done") setProgress(100);
-            else if (data.status === "failed") setProgress(0);
+          try {
+            const data: JobData = await response.json();
+
+            // 检查result_url是否包含错误信息
+            if (data.result_url && data.result_url.startsWith('ERROR:')) {
+              data.error_message = data.result_url.substring(7); // 移除"ERROR: "前缀
+              data.result_url = undefined; // 清空result_url
+            }
+
+            setJobData(data);
+
+            // 更新进度条
+            if (generationType === 'longvideo') {
+              // 长视频使用实际进度
+              setProgress(data.progress || 0);
+            } else {
+              // 短视频和图片使用更详细的估计进度
+              if (data.status === "queued") setProgress(15);
+              else if (data.status === "processing") setProgress(85);
+              else if (data.status === "done") setProgress(100);
+              else if (data.status === "failed") setProgress(0);
+            }
+          } catch (jsonError) {
+            console.error("Failed to parse JSON response:", jsonError);
+            // 尝试获取原始文本以便调试
+            try {
+              const clonedResponse = response.clone();
+              const text = await clonedResponse.text();
+              console.error("Response text:", text.substring(0, 200));
+            } catch (textError) {
+              console.error("Failed to read response text:", textError);
+            }
           }
+        } else {
+          console.error("Response not OK:", response.status, response.statusText);
         }
       } catch (error) {
         console.error("Failed to fetch job status:", error);
@@ -94,24 +116,44 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
         }
 
         if (response.ok) {
-          const data: JobData = await response.json();
+          try {
+            const data: JobData = await response.json();
 
-          // 检查是否完成，如果完成就停止轮询
-          if (data.status === "done" || data.status === "failed") {
-            clearInterval(interval);
+            // 检查result_url是否包含错误信息
+            if (data.result_url && data.result_url.startsWith('ERROR:')) {
+              data.error_message = data.result_url.substring(7); // 移除"ERROR: "前缀
+              data.result_url = undefined; // 清空result_url
+            }
+
+            // 检查是否完成，如果完成就停止轮询
+            if (data.status === "done" || data.status === "failed") {
+              clearInterval(interval);
+            }
+
+            setJobData(data);
+
+            // 更新进度条
+            if (generationType === 'longvideo') {
+              setProgress(data.progress || 0);
+            } else {
+              if (data.status === "queued") setProgress(15);
+              else if (data.status === "processing") setProgress(85);
+              else if (data.status === "done") setProgress(100);
+              else if (data.status === "failed") setProgress(0);
+            }
+          } catch (jsonError) {
+            console.error("Failed to parse JSON response in interval:", jsonError);
+            // 尝试获取原始文本以便调试
+            try {
+              const clonedResponse = response.clone();
+              const text = await clonedResponse.text();
+              console.error("Response text:", text.substring(0, 200));
+            } catch (textError) {
+              console.error("Failed to read response text:", textError);
+            }
           }
-
-          setJobData(data);
-
-          // 更新进度条
-          if (generationType === 'longvideo') {
-            setProgress(data.progress || 0);
-          } else {
-            if (data.status === "queued") setProgress(15);
-            else if (data.status === "processing") setProgress(85);
-            else if (data.status === "done") setProgress(100);
-            else if (data.status === "failed") setProgress(0);
-          }
+        } else {
+          console.error("Response not OK in interval:", response.status, response.statusText);
         }
       } catch (error) {
         console.error("Failed to fetch job status in interval:", error);
@@ -388,9 +430,16 @@ export function GenerationModal({ isOpen, onClose, jobId, templateName, generati
           {/* 失败状态 */}
           {jobData?.status === "failed" && (
             <div className="text-center space-y-4">
-              <p className="text-sm text-gray-500">
-                生成过程中遇到问题，请稍后重试
-              </p>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="text-sm text-red-800 font-medium mb-2">
+                  {jobData.error_message || "生成过程中遇到问题"}
+                </p>
+                {jobData.error_message?.includes('人脸') && (
+                  <p className="text-xs text-red-600">
+                    提示：请确保上传的图片或视频中包含清晰可见的人脸
+                  </p>
+                )}
+              </div>
               <Button onClick={onClose} variant="outline">
                 关闭
               </Button>

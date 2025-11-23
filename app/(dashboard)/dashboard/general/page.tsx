@@ -57,13 +57,13 @@ function AccountForm({
         </Label>
         <Select name="gender" defaultValue={state.gender || genderValue || "not_specified"}>
           <SelectTrigger>
-            <SelectValue placeholder="未指定" />
+            <SelectValue placeholder={t('notSpecified')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="not_specified">未指定</SelectItem>
-            <SelectItem value="male">男</SelectItem>
-            <SelectItem value="female">女</SelectItem>
-            <SelectItem value="other">其他</SelectItem>
+            <SelectItem value="not_specified">{t('notSpecified')}</SelectItem>
+            <SelectItem value="male">{t('male')}</SelectItem>
+            <SelectItem value="female">{t('female')}</SelectItem>
+            <SelectItem value="other">{t('other')}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -81,7 +81,7 @@ function AccountForm({
           className="bg-gray-50"
         />
         <p className="text-sm text-gray-500 mt-1">
-          邮箱地址不可修改
+          {t('emailNotEditable')}
         </p>
       </div>
     </>

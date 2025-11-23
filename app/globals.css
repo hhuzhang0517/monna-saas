@@ -273,3 +273,8 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Chatwoot 图标位置调整 - 往上移动 100px */
+.woot-widget-bubble {
+  bottom: 300px !important;
+}

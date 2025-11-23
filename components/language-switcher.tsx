@@ -23,12 +23,15 @@ export function LanguageSwitcher({ variant = 'default', size = 'md', className =
     setIsOpen(false);
   };
 
+  // 将自定义 size 映射到 Button 组件接受的 size
+  const buttonSize = size === 'md' ? 'default' : size as 'sm' | 'lg';
+
   if (variant === 'icon-only') {
     return (
       <div className="relative">
         <Button
           variant="ghost"
-          size={size}
+          size={buttonSize}
           onClick={() => setIsOpen(!isOpen)}
           className="p-2"
         >
@@ -107,7 +110,7 @@ export function LanguageSwitcher({ variant = 'default', size = 'md', className =
     <div className="relative">
       <Button
         variant="outline"
-        size={size}
+        size={buttonSize}
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2"
       >

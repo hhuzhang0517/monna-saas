@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Loader2, PlusCircle, Download, Image, Video, Trash2, Circle } from 'lucide-react';
+import { useTranslation, useLanguage } from '@/lib/contexts/language-context';
 
 type ActionState = {
   error?: string;
@@ -155,10 +156,12 @@ function TeamMembers() {
 }
 
 function GenerationHistorySkeleton() {
+  const { t } = useTranslation();
+  
   return (
     <Card className="mb-8 h-[300px]">
       <CardHeader>
-        <CardTitle>生成历史</CardTitle>
+        <CardTitle>{t('generationHistory')}</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="animate-pulse space-y-4">
@@ -179,6 +182,8 @@ function GenerationHistorySkeleton() {
 
 function GenerationHistory() {
   const { data: generations, mutate } = useSWR<Generation[]>('/api/user/generations', fetcher);
+  const { t } = useTranslation();
+  const { currentLanguage } = useLanguage();
   
   const handleDownload = async (url: string, filename: string) => {
     try {
@@ -205,16 +210,17 @@ function GenerationHistory() {
       if (response.ok) {
         mutate(); // 重新获取数据
         const result = await response.json();
-        alert(`清理完成: 删除了 ${result.deleted} 条记录`);
+        alert(t('cleanupComplete', { count: result.deleted }));
       }
     } catch (error) {
       console.error('Cleanup failed:', error);
-      alert('清理失败，请重试');
+      alert(t('cleanupFailed'));
     }
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString('zh-CN');
+    const localeCode = currentLanguage === 'zh' ? 'zh-CN' : currentLanguage === 'ja' ? 'ja-JP' : 'en-US';
+    return new Date(dateString).toLocaleString(localeCode);
   };
 
   const truncatePrompt = (prompt: string, maxLength: number = 60) => {
@@ -225,7 +231,7 @@ function GenerationHistory() {
     <Card className="mb-8">
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle>生成历史</CardTitle>
+          <CardTitle>{t('generationHistory')}</CardTitle>
           <Button 
             variant="outline" 
             size="sm" 
@@ -233,7 +239,7 @@ function GenerationHistory() {
             className="text-red-600 hover:text-red-700"
           >
             <Trash2 className="h-4 w-4 mr-2" />
-            清理旧记录
+            {t('cleanupOldRecords')}
           </Button>
         </div>
       </CardHeader>
@@ -244,14 +250,14 @@ function GenerationHistory() {
               <Circle className="w-8 h-8 text-gray-400" />
             </div>
             <h3 className="text-lg font-medium text-gray-900 mb-2">
-              暂无生成历史
+              {t('noGenerationHistoryYet')}
             </h3>
             <p className="text-gray-500 mb-4">
-              开始生成AI内容，在这里查看历史记录
+              {t('startGeneratingContent')}
             </p>
             <Button asChild>
               <Link href="/generate">
-                开始生成
+                {t('startGenerating')}
               </Link>
             </Button>
           </div>
@@ -282,7 +288,7 @@ function GenerationHistory() {
                       <Video className="h-4 w-4 text-gray-500" />
                     )}
                     <span className="text-sm font-medium">
-                      {gen.type === 'image' ? '图片生成' : '视频生成'}
+                      {gen.type === 'image' ? t('imageGenType') : t('shortVideoGenType')}
                     </span>
                   </div>
                   <p className="text-sm text-gray-600 mb-2">
@@ -299,7 +305,7 @@ function GenerationHistory() {
                     gen.result_url,
                     `monna-${gen.type}-${gen.id.slice(0, 8)}.${gen.type === 'image' ? 'png' : 'mp4'}`
                   )}
-                  title="重新下载"
+                  title={t('downloadAgain')}
                 >
                   <Download className="h-4 w-4" />
                 </Button>
@@ -405,9 +411,11 @@ function InviteTeamMember() {
 }
 
 export default function GenerationHistoryPage() {
+  const { t } = useTranslation();
+  
   return (
     <section className="flex-1 p-4 lg:p-8">
-      <h1 className="text-lg lg:text-2xl font-medium mb-6">生成历史</h1>
+      <h1 className="text-lg lg:text-2xl font-medium mb-6">{t('generationHistory')}</h1>
       
       <Suspense fallback={<GenerationHistorySkeleton />}>
         <GenerationHistory />

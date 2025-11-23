@@ -54,14 +54,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "team not found" }, { status: 404 });
     }
 
-    const planName = subscriptionInfo.planName || 'free';
+    const planName = subscriptionInfo.plan_name || 'free';
     const planConfig = SUBSCRIPTION_PLANS[planName as keyof typeof SUBSCRIPTION_PLANS] || SUBSCRIPTION_PLANS.free;
 
     // 检查计划是否支持请求的功能
     if (type === 'video' && !planConfig.features.videoGeneration) {
       return NextResponse.json({
         error: "plan_restriction",
-        message: `当前计划 ${planConfig.name} 不支持视频生成功能，请升级到专业档或企业档`
+        message: `当前计划 ${planConfig.name} 不支持视频生成功能，请升级到专业档或至尊档`
       }, { status: 403 });
     }
 
@@ -274,24 +274,51 @@ export async function POST(req: NextRequest) {
       
     } catch (processingError) {
       console.error("❌ Processing error:", processingError);
-      
-      // 更新为失败状态
-      await supa.from("jobs").update({ status: "failed" }).eq("id", jobId);
-      
+
+      // 提取用户友好的错误信息
+      let userFriendlyMessage = "生成失败，请重试";
+      const errorMsg = (processingError as Error).message || '';
+
+      // 从错误信息中提取PERMANENT_FAILURE后的内容
+      if (errorMsg.includes('PERMANENT_FAILURE:')) {
+        userFriendlyMessage = errorMsg.split('PERMANENT_FAILURE:')[1].trim();
+      } else if (errorMsg.includes('未在图片或视频中检测到人脸')) {
+        userFriendlyMessage = errorMsg;
+      } else if (errorMsg.includes('视频内容不符合平台政策')) {
+        userFriendlyMessage = errorMsg;
+      } else if (errorMsg.includes('视频生成超时')) {
+        userFriendlyMessage = errorMsg;
+      } else if (errorMsg.length > 0 && errorMsg.length < 200) {
+        // 如果错误消息不太长且不包含技术细节，直接使用
+        if (!errorMsg.toLowerCase().includes('error') &&
+            !errorMsg.toLowerCase().includes('exception') &&
+            !errorMsg.toLowerCase().includes('stack')) {
+          userFriendlyMessage = errorMsg;
+        }
+      }
+
+      console.log('📝 User-friendly error message:', userFriendlyMessage);
+
+      // 更新为失败状态，并保存错误信息到result_url字段（临时方案）
+      await supa.from("jobs").update({
+        status: "failed",
+        result_url: `ERROR: ${userFriendlyMessage}` // 使用特殊前缀标记这是错误信息
+      }).eq("id", jobId);
+
       // 任务失败，退还信用点
       const refundSuccess = await CreditManager.refundCredits({
         teamId: subscriptionInfo.id,
         jobId: jobId,
         amount: requiredCredits,
-        reason: `任务处理失败，自动退还信用点：${processingError.message}`
+        reason: `任务处理失败，自动退还信用点：${userFriendlyMessage}`
       });
-      
+
       if (refundSuccess) {
         console.log(`💸 Credit refunded: ${requiredCredits} credits due to processing failure`);
       } else {
         console.error(`❌ Failed to refund credits for failed job: ${jobId}`);
       }
-      
+
       console.log(`❌ Job ${jobId} failed, credits refunded: ${refundSuccess}`);
     }
   })().catch(error => {

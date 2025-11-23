@@ -1,13 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
+import { getAuthenticatedUser } from "@/lib/supabase/auth-helper";
 
 export async function GET(req: NextRequest) {
   try {
-    const supa = await createSupabaseServer();
-    const { data: { user } } = await supa.auth.getUser();
+    console.log('🔍 User generations API - request info:', {
+      hasAuthHeader: !!req.headers.get('authorization'),
+      cookieCount: req.cookies.getAll().length,
+    });
+    
+    // 使用统一的认证函数，支持 Cookie 和 Bearer token
+    const user = await getAuthenticatedUser(req);
+    
     if (!user) {
+      console.log('❌ User generations API - unauthorized');
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
+    
+    console.log('✅ User generations API - user authenticated:', user.email);
+    
+    const supa = await createSupabaseServer();
 
     // 获取最近5次成功的生成记录，按创建时间倒序
     const { data: generations, error } = await supa
@@ -36,11 +48,17 @@ export async function GET(req: NextRequest) {
 // 清理超过5个的历史记录
 export async function DELETE(req: NextRequest) {
   try {
-    const supa = await createSupabaseServer();
-    const { data: { user } } = await supa.auth.getUser();
+    // 使用统一的认证函数，支持 Cookie 和 Bearer token
+    const user = await getAuthenticatedUser(req);
+    
     if (!user) {
+      console.log('❌ Delete generations API - unauthorized');
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
+    
+    console.log('✅ Delete generations API - user authenticated:', user.email);
+    
+    const supa = await createSupabaseServer();
 
     // 获取所有成功的生成记录，按创建时间倒序
     const { data: allGenerations, error: fetchError } = await supa

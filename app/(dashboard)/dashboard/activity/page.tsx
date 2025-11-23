@@ -2,42 +2,44 @@
 
 import { Suspense } from 'react';
 import Link from 'next/link';
-import { CreditCard, TrendingUp, Calendar } from 'lucide-react';
+import { CreditCard, TrendingUp, Calendar, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import useSWR from 'swr';
-// import { useTranslation } from '@/lib/contexts/language-context';
+import { customerPortalAction } from '@/lib/payments/actions';
+import { useTranslation, useLanguage } from '@/lib/contexts/language-context';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 // 获取生成类型显示名称和图标
-function getGenerationType(jobInfo: any) {
+function getGenerationType(jobInfo: any, t: any) {
   if (!jobInfo) return { name: '-', icon: '💳', unit: '-' };
   
   if (jobInfo.type === 'image') {
-    return { name: '图片生成', icon: '🖼️', unit: '1张' };
+    return { name: t('imageGenType'), icon: '🖼️', unit: t('imageCount', { count: 1 }) };
   } else if (jobInfo.type === 'video') {
     const duration = jobInfo.video_duration || 5; // 默认5秒
-    return { name: '短视频生成', icon: '🎬', unit: `${duration}秒` };
+    return { name: t('shortVideoGenType'), icon: '🎬', unit: t('videoSeconds', { seconds: duration }) };
   } else if (jobInfo.type === 'longvideo') {
     const duration = jobInfo.video_duration || 30; // 默认30秒
-    return { name: '长视频生成', icon: '🎞️', unit: `${duration}秒` };
+    return { name: t('longVideoGenType'), icon: '🎞️', unit: t('videoSeconds', { seconds: duration }) };
   }
   
-  return { name: '未知类型', icon: '❓', unit: '-' };
+  return { name: t('unknownType'), icon: '❓', unit: '-' };
 }
 
 // 格式化日期时间
-function formatDateTime(dateString: string) {
+function formatDateTime(dateString: string, locale: string) {
   const date = new Date(dateString);
+  const localeCode = locale === 'zh' ? 'zh-CN' : locale === 'ja' ? 'ja-JP' : 'en-US';
   return {
-    date: date.toLocaleDateString('zh-CN', { 
+    date: date.toLocaleDateString(localeCode, { 
       year: 'numeric', 
       month: '2-digit', 
       day: '2-digit' 
     }),
-    time: date.toLocaleTimeString('zh-CN', { 
+    time: date.toLocaleTimeString(localeCode, { 
       hour: '2-digit', 
       minute: '2-digit' 
     })
@@ -47,12 +49,14 @@ function formatDateTime(dateString: string) {
 // 信用点交易记录组件（增强版表格）
 function CreditHistory() {
   const { data: creditHistoryResponse } = useSWR('/api/credits/history', fetcher);
+  const { t } = useTranslation();
+  const { currentLanguage } = useLanguage();
 
   if (!creditHistoryResponse) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>信用点消费记录</CardTitle>
+          <CardTitle>{t('creditHistory')}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="animate-pulse space-y-3">
@@ -71,28 +75,28 @@ function CreditHistory() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>信用点消费记录</CardTitle>
-        <p className="text-sm text-gray-500">详细记录每次AI生成任务的消费情况</p>
+        <CardTitle>{t('creditHistory')}</CardTitle>
+        <p className="text-sm text-gray-500">{t('generationHistory')}</p>
       </CardHeader>
       <CardContent>
         {creditHistory.length === 0 ? (
-          <p className="text-gray-500 text-center py-8">暂无消费记录</p>
+          <p className="text-gray-500 text-center py-8">{t('noGenerationHistory')}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b text-sm text-gray-500">
-                  <th className="text-left py-3 px-2">类型</th>
-                  <th className="text-left py-3 px-2">规格</th>
-                  <th className="text-right py-3 px-2">消费</th>
-                  <th className="text-left py-3 px-2">日期时间</th>
-                  <th className="text-right py-3 px-2">余额</th>
+                  <th className="text-left py-3 px-2">{t('type')}</th>
+                  <th className="text-left py-3 px-2">{t('specification')}</th>
+                  <th className="text-right py-3 px-2">{t('consumption')}</th>
+                  <th className="text-left py-3 px-2">{t('dateTime')}</th>
+                  <th className="text-right py-3 px-2">{t('balance')}</th>
                 </tr>
               </thead>
               <tbody>
                 {creditHistory.map((transaction: any) => {
-                  const genType = getGenerationType(transaction.job_info);
-                  const dateTime = formatDateTime(transaction.created_at);
+                  const genType = getGenerationType(transaction.job_info, t);
+                  const dateTime = formatDateTime(transaction.created_at, currentLanguage);
                   const isConsume = transaction.type === 'consume';
                   const isCharge = transaction.type === 'charge';
                   const isRefund = transaction.type === 'refund';
@@ -104,8 +108,8 @@ function CreditHistory() {
                           <span className="text-lg">{genType.icon}</span>
                           <div>
                             <p className="font-medium text-sm">
-                              {isCharge ? '📈 订阅续费' : 
-                               isRefund ? '↩️ 退款' : 
+                              {isCharge ? `📈 ${t('subscriptionRenewal')}` : 
+                               isRefund ? `↩️ ${t('refund')}` : 
                                genType.name}
                             </p>
                             {transaction.job_info?.provider && (
@@ -120,9 +124,9 @@ function CreditHistory() {
                       <td className="py-4 px-2">
                         <span className="text-sm font-medium">
                           {isCharge ? 
-                            (transaction.reason.includes('基础档') ? '+2000' : 
-                             transaction.reason.includes('高级档') ? '+5000' : 
-                             transaction.reason.includes('专业档') ? '+10000' : '+') :
+                            (transaction.reason.includes('基础档') || transaction.reason.includes('Basic') ? '+2000' : 
+                             transaction.reason.includes('高级档') || transaction.reason.includes('Professional') ? '+5000' : 
+                             transaction.reason.includes('专业档') || transaction.reason.includes('Enterprise') ? '+10000' : '+') :
                            isRefund ? '-' :
                            genType.unit}
                         </span>
@@ -135,7 +139,7 @@ function CreditHistory() {
                           {isCharge || isRefund ? '+' : '-'}
                           {Math.abs(transaction.amount)}
                         </span>
-                        <span className="text-xs text-gray-500 ml-1">积分</span>
+                        <span className="text-xs text-gray-500 ml-1">{t('creditsUnit')}</span>
                       </td>
                       
                       <td className="py-4 px-2">
@@ -149,7 +153,7 @@ function CreditHistory() {
                         <span className="text-sm font-medium">
                           {transaction.balance_after}
                         </span>
-                        <span className="text-xs text-gray-500 ml-1">积分</span>
+                        <span className="text-xs text-gray-500 ml-1">{t('creditsUnit')}</span>
                       </td>
                     </tr>
                   );
@@ -166,12 +170,13 @@ function CreditHistory() {
 // 订阅计划组件
 function SubscriptionCard() {
   const { data: teamData } = useSWR('/api/team', fetcher);
+  const { t } = useTranslation();
 
   if (!teamData) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>订阅计划</CardTitle>
+          <CardTitle>{t('subscriptionPlan')}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="animate-pulse">
@@ -184,46 +189,74 @@ function SubscriptionCard() {
     );
   }
 
-  const planNames = {
-    'free': '免费档',
-    'basic': '基础档',
-    'professional': '专业档',
-    'enterprise': '企业档'
+  const getPlanName = (planName: string) => {
+    const planMap: Record<string, string> = {
+      'free': t('freePlan'),
+      'basic': t('basicPlan'),
+      'professional': t('professionalPlan'),
+      'enterprise': t('enterprisePlan')
+    };
+    return planMap[planName] || planName || t('freePlan');
   };
 
-  const currentPlan = planNames[teamData?.planName as keyof typeof planNames] || teamData?.planName || '免费档';
+  const currentPlan = getPlanName(teamData?.planName);
+
+  // 判断是否有活跃订阅
+  const hasActiveSubscription = teamData?.subscriptionStatus === 'active' ||
+                                 teamData?.subscriptionStatus === 'trialing';
+  const isFreeUser = teamData?.planName === 'free';
+
+  const getStatusText = (status: string) => {
+    if (status === 'active') return t('activeStatus');
+    if (status === 'trialing') return t('trialingStatus');
+    return t('inactiveStatus');
+  };
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center space-x-2">
           <CreditCard className="h-5 w-5" />
-          <span>订阅计划</span>
+          <span>{t('subscriptionPlan')}</span>
         </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
           <div>
-            <p className="text-sm text-gray-500">当前计划</p>
+            <p className="text-sm text-gray-500">{t('currentPlan')}</p>
             <div className="flex items-center justify-between">
               <p className="text-xl font-semibold">{currentPlan}</p>
-              <Badge variant={teamData?.subscriptionStatus === 'active' ? 'default' : 'secondary'}>
-                {teamData?.subscriptionStatus === 'active' ? '已激活' :
-                 teamData?.subscriptionStatus === 'trialing' ? '试用中' : '未激活'}
+              <Badge variant={hasActiveSubscription ? 'default' : 'secondary'}>
+                {getStatusText(teamData?.subscriptionStatus)}
               </Badge>
             </div>
           </div>
 
           <div>
-            <p className="text-sm text-gray-500">剩余信用点</p>
+            <p className="text-sm text-gray-500">{t('remainingCredits')}</p>
             <p className="text-2xl font-bold text-orange-500">{teamData?.credits || 0}</p>
           </div>
 
-          <Link href="/pricing">
-            <Button className="w-full bg-orange-500 hover:bg-orange-600">
-              升级订阅
-            </Button>
-          </Link>
+          <div className="space-y-2">
+            <Link href="/pricing">
+              <Button className="w-full bg-orange-500 hover:bg-orange-600">
+                {t('upgradeSubscription')}
+              </Button>
+            </Link>
+
+            {hasActiveSubscription && !isFreeUser && (
+              <form action={customerPortalAction}>
+                <Button
+                  type="submit"
+                  variant="outline"
+                  className="w-full text-red-600 hover:text-red-700 hover:bg-red-50"
+                >
+                  <XCircle className="h-4 w-4 mr-2" />
+                  {t('cancelSubscription')}
+                </Button>
+              </form>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -236,6 +269,8 @@ function UsageStatsCard() {
     refreshInterval: 30000, // 每30秒自动刷新
     revalidateOnFocus: true, // 页面获得焦点时重新验证
   });
+  const { t } = useTranslation();
+  const { currentLanguage } = useLanguage();
 
   if (!statsData) {
     return (
@@ -243,7 +278,7 @@ function UsageStatsCard() {
         <CardHeader>
           <CardTitle className="flex items-center space-x-2">
             <TrendingUp className="h-5 w-5" />
-            <span>使用统计</span>
+            <span>{t('usageStats')}</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -266,29 +301,31 @@ function UsageStatsCard() {
     );
   }
 
+  const localeCode = currentLanguage === 'zh' ? 'zh-CN' : currentLanguage === 'ja' ? 'ja-JP' : 'en-US';
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center space-x-2">
           <TrendingUp className="h-5 w-5" />
-          <span>使用统计</span>
+          <span>{t('usageStats')}</span>
         </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
           <div className="flex justify-between items-center">
-            <span className="text-sm text-gray-500">本月生成次数</span>
+            <span className="text-sm text-gray-500">{t('monthGenerationCount')}</span>
             <span className="font-semibold">{statsData.monthGenerationCount || 0}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-sm text-gray-500">本月消费信用点</span>
+            <span className="text-sm text-gray-500">{t('monthCreditsConsumed')}</span>
             <span className="font-semibold">{statsData.monthCreditsConsumed || 0}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-sm text-gray-500">下次续费日期</span>
+            <span className="text-sm text-gray-500">{t('nextRenewalDate')}</span>
             <span className="font-semibold">
               {statsData.nextRenewalDate
-                ? new Date(statsData.nextRenewalDate).toLocaleDateString('zh-CN')
+                ? new Date(statsData.nextRenewalDate).toLocaleDateString(localeCode)
                 : '-'}
             </span>
           </div>
@@ -299,12 +336,13 @@ function UsageStatsCard() {
 }
 
 export default function ActivityPage() {
+  const { t } = useTranslation();
 
   return (
     <section className="flex-1 p-4 lg:p-8">
       <div className="mb-6">
         <h1 className="text-lg lg:text-2xl font-medium text-gray-900">
-          订阅与账单
+          {t('subscriptionBilling')}
         </h1>
       </div>
 
@@ -313,7 +351,7 @@ export default function ActivityPage() {
         <Suspense fallback={
           <Card>
             <CardHeader>
-              <CardTitle>订阅计划</CardTitle>
+              <CardTitle>{t('subscriptionPlan')}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="animate-pulse space-y-3">
@@ -333,7 +371,7 @@ export default function ActivityPage() {
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
                 <TrendingUp className="h-5 w-5" />
-                <span>使用统计</span>
+                <span>{t('usageStats')}</span>
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -363,7 +401,7 @@ export default function ActivityPage() {
         <Suspense fallback={
           <Card>
             <CardHeader>
-              <CardTitle>信用点历史</CardTitle>
+              <CardTitle>{t('creditHistory')}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="animate-pulse space-y-3">

@@ -9,22 +9,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
-    // 清理超过1小时的 queued 或 processing 任务，将其标记为失败
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    
-    const { data: expiredJobs, error: fetchError } = await supa
+    // 读取请求参数，支持强制清理所有待处理任务
+    const body = await req.json().catch(() => ({}));
+    const forceAll = body.forceAll === true;
+
+    let query = supa
       .from("jobs")
       .select("id, created_at, status")
       .eq("user_id", user.id)
-      .in("status", ["queued", "processing"])
-      .lt("created_at", oneHourAgo);
+      .in("status", ["queued", "processing"]);
+
+    // 如果不是强制清理所有，则只清理超过1小时的任务
+    if (!forceAll) {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      query = query.lt("created_at", oneHourAgo);
+    }
+
+    const { data: expiredJobs, error: fetchError } = await query;
 
     if (fetchError) {
       console.error("Failed to fetch expired jobs:", fetchError);
       return NextResponse.json({ error: "failed to fetch expired jobs" }, { status: 500 });
     }
 
-    console.log("🧹 Found expired jobs to clean:", expiredJobs);
+    console.log(`🧹 Found ${forceAll ? 'all pending' : 'expired'} jobs to clean:`, expiredJobs);
 
     if (expiredJobs && expiredJobs.length > 0) {
       const jobIds = expiredJobs.map(job => job.id);

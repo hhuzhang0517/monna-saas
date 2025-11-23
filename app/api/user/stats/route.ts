@@ -2,31 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { stripe } from "@/lib/payments/stripe";
 import { getTeamForUser } from "@/lib/db/queries";
+import { getAuthenticatedUser, createAuthenticatedSupabaseFromRequest } from "@/lib/supabase/auth-helper";
 
 export async function GET(req: NextRequest) {
   try {
-    console.log('🔍 User stats API - cookies received:', {
+    console.log('🔍 User stats API - request info:', {
+      hasAuthHeader: !!req.headers.get('authorization'),
       cookieCount: req.cookies.getAll().length,
-      cookieNames: req.cookies.getAll().map(c => c.name),
-      hasAuthCookies: req.cookies.getAll().some(c => c.name.includes('auth-token'))
     });
     
-    const supa = await createSupabaseServer();
-    const { data: { user }, error } = await supa.auth.getUser();
-    
-    console.log('🔍 User stats API - auth check:', {
-      hasUser: !!user,
-      userEmail: user?.email,
-      error: error?.message
-    });
+    // 使用统一的认证函数，支持 Cookie 和 Bearer token
+    const user = await getAuthenticatedUser(req);
     
     if (!user) {
       console.log('❌ User stats API - unauthorized');
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
+    
+    console.log('✅ User stats API - user authenticated:', user.email);
+    
+    // 获取带有正确认证上下文的 Supabase 客户端（支持 Bearer token 和 Cookie）
+    const supa = await createAuthenticatedSupabaseFromRequest(req);
 
-    // 获取当前用户所属的团队信息（使用统一的查询函数）
-    const team = await getTeamForUser();
+    // 获取当前用户所属的团队信息（传入已认证的用户和 Supabase 客户端）
+    const team = await getTeamForUser(user, supa);
 
     console.log('🔍 Team found for stats:', {
       hasTeam: !!team,
@@ -40,9 +39,13 @@ export async function GET(req: NextRequest) {
     if (team?.stripeSubscriptionId) {
       try {
         const subscription = await stripe.subscriptions.retrieve(team.stripeSubscriptionId);
-        if (subscription.status === 'active' || subscription.status === 'trialing') {
+        if (subscription && (subscription.status === 'active' || subscription.status === 'trialing')) {
           // current_period_end 是 Unix 时间戳（秒），需要转换为毫秒
-          nextRenewalDate = new Date(subscription.current_period_end * 1000).toISOString();
+          // 使用类型断言来访问 Stripe 对象的属性
+          const periodEnd = (subscription as any).current_period_end;
+          if (periodEnd) {
+            nextRenewalDate = new Date(periodEnd * 1000).toISOString();
+          }
         }
       } catch (error) {
         console.error("Failed to fetch Stripe subscription:", error);
@@ -119,7 +122,7 @@ export async function GET(req: NextRequest) {
     // 查询本月的任务（用于统计本月生成次数）
     const { data: monthJobs, error: monthJobsError } = await supa
       .from("jobs")
-      .select("id, created_at")
+      .select("id, created_at, type")
       .eq("user_id", user.id)
       .eq("status", "done")
       .gte("created_at", firstDayOfMonth);
