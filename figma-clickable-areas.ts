@@ -1,4 +1,16 @@
 // 基于您的 Figma 设计稿自动生成的可点击区域
+interface FigmaTemplate {
+  id: string;
+  name: string;
+  image: string;
+  category: string;
+  prompt: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 const FIGMA_CLICKABLE_AREAS: FigmaTemplate[] = [
   {
     id: "figma-rectangle-1",

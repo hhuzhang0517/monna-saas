@@ -31,10 +31,28 @@ export async function updateSession(request: NextRequest) {
           });
         },
       },
+      global: {
+        fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+          // 为所有Supabase请求添加超时控制
+          return Promise.race([
+            fetch(input, init),
+            new Promise<Response>((_, reject) =>
+              setTimeout(() => reject(new Error('Supabase request timeout')), 8000)
+            ),
+          ]);
+        },
+      },
     }
   );
 
-  await supabase.auth.getUser();
+  try {
+    // 添加错误处理，避免认证失败时中断整个请求
+    await supabase.auth.getUser();
+  } catch (error) {
+    // 静默处理认证错误，让请求继续进行
+    // 实际的认证会在API路由中再次验证
+    console.error('Middleware auth error (non-blocking):', error instanceof Error ? error.message : 'Unknown error');
+  }
 
   return response;
 }

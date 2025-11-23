@@ -1,6 +1,7 @@
 // Supabase 版本的信用点管理器 - 单一数据库架构
 import { createSupabaseServer } from '@/lib/supabase/server';
 import { getTeamCredits } from '@/lib/db/queries';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface CreditOperation {
   teamId: number;
@@ -10,6 +11,7 @@ export interface CreditOperation {
   type: 'charge' | 'consume' | 'refund' | 'bonus';
   reason: string;
   metadata?: Record<string, any>;
+  supabaseClient?: SupabaseClient<any, "public", any>; // 可选：外部传入的 Supabase 客户端
 }
 
 export interface CreditBalance {
@@ -54,16 +56,15 @@ export const SUBSCRIPTION_PLANS = {
     features: {
       imageGeneration: true,
       videoGeneration: true,
-      longVideoGeneration: true,
+      longVideoGeneration: false, // 专业档不支持长视频生成
     },
     creditCosts: {
       image: 8,
       videoPerSecond: 15, // 短视频每秒15 credit
-      longVideoPerSecond: 80, // 长视频每秒80 credit
     }
   },
   enterprise: {
-    name: '企业档',
+    name: '至尊档',
     price: 10000, // $100.00 in cents
     credits: 10000,
     features: {
@@ -99,7 +100,8 @@ export class CreditManager {
    * 执行信用点交易（原子操作）
    */
   static async executeTransaction(operation: CreditOperation): Promise<boolean> {
-    const supabase = await createSupabaseServer();
+    // 使用外部传入的客户端，或创建新的（用于 webhook 等场景）
+    const supabase = operation.supabaseClient || await createSupabaseServer();
     
     try {
       // 获取当前余额
@@ -230,6 +232,7 @@ export class CreditManager {
     amount: number;
     reason: string;
     planName?: string;
+    supabaseClient?: SupabaseClient<any, "public", any>; // 可选：外部传入的客户端
   }): Promise<boolean> {
     return this.executeTransaction({
       teamId: params.teamId,
@@ -238,6 +241,7 @@ export class CreditManager {
       type: 'charge',
       reason: params.reason,
       metadata: { planName: params.planName },
+      supabaseClient: params.supabaseClient, // 传递客户端
     });
   }
 
@@ -326,15 +330,15 @@ export class CreditManager {
     switch (params.taskType) {
       case 'image':
         return plan.creditCosts.image;
-      
+
       case 'video':
-        if (!plan.creditCosts.videoPerSecond) {
+        if (!('videoPerSecond' in plan.creditCosts)) {
           throw new Error(`Plan ${params.planName} does not support video generation`);
         }
         return Math.ceil((params.duration || 5) * plan.creditCosts.videoPerSecond);
-      
+
       case 'longvideo':
-        if (!plan.creditCosts.longVideoPerSecond) {
+        if (!('longVideoPerSecond' in plan.creditCosts)) {
           throw new Error(`Plan ${params.planName} does not support long video generation`);
         }
         return Math.ceil((params.duration || 30) * plan.creditCosts.longVideoPerSecond);
@@ -359,6 +363,7 @@ export class CreditManager {
     teamId: number;
     userId?: string;
     planName: string;
+    supabaseClient?: SupabaseClient<any, "public", any>; // 可选：外部传入的客户端
   }): Promise<boolean> {
     const plan = SUBSCRIPTION_PLANS[params.planName as keyof typeof SUBSCRIPTION_PLANS];
     if (!plan) {
@@ -372,6 +377,7 @@ export class CreditManager {
       amount: plan.credits,
       reason: `订阅${plan.name}计划获得信用点`,
       planName: params.planName,
+      supabaseClient: params.supabaseClient, // 传递客户端
     });
   }
 }

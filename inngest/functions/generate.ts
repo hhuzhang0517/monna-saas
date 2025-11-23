@@ -5,7 +5,11 @@ import { generateImageIdeogram } from "@/lib/providers/ideogram";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
 export const generateMedia = inngest.createFunction(
-  { id: "generate-media", concurrency: { limit: 3 }, throttle: { limit: 30, period: "1m" } },
+  {
+    id: "generate-media",
+    concurrency: { limit: 3 },
+    throttle: { limit: 30, period: "1m" }
+  },
   { event: "app/generate.requested" },
   async ({ event, step }) => {
     const { jobId, provider, prompt } = event.data as any;

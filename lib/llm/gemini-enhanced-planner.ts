@@ -22,6 +22,9 @@ interface NarrativeAnalysis {
   key_themes: string[];
   visual_style: VisualStyleGuide;
   pacing_rhythm: PacingProfile;
+  identity_anchors?: string; // 从参考图片提取的身份锚点（可选）
+  subject_type?: 'person' | 'object'; // 主体类型：人或物体
+  subject_descriptor?: string; // 用于 shot 1 前缀的描述词
 }
 
 interface CharacterProfile {
@@ -102,6 +105,12 @@ interface ConsistencyAnchor {
   consistency_prompt: string;
 }
 
+interface ImageAnalysisResult {
+  identityAnchors: string; // 完整的身份锚点描述
+  subjectType: 'person' | 'object'; // 主体类型
+  subjectDescriptor: string; // 简短的主体描述词（如 "necklace", "the woman" 等）
+}
+
 // ==================== 增强Gemini分析器 ====================
 class GeminiEnhancedShotPlanner {
   private gemini: ChatGoogleGenerativeAI;
@@ -109,6 +118,12 @@ class GeminiEnhancedShotPlanner {
   private visionModel: any;
 
   constructor() {
+    // 检查API key
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY or GOOGLE_API_KEY is not set");
+    }
+
     // 配置Gemini 2.5 Flash - 最新最快的版本
     this.gemini = new ChatGoogleGenerativeAI({
       model: "gemini-2.0-flash-exp", // 使用实验版获得最新功能
@@ -116,6 +131,7 @@ class GeminiEnhancedShotPlanner {
       maxOutputTokens: 8192,
       topK: 40,
       topP: 0.95,
+      apiKey: apiKey, // 显式传递API key
       // safetySettings可能在某些版本中有类型问题，暂时移除
       // safetySettings: [
       //   {
@@ -126,7 +142,7 @@ class GeminiEnhancedShotPlanner {
     });
 
     // 多模态分析客户端
-    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    this.genAI = new GoogleGenerativeAI(apiKey);
     this.visionModel = this.genAI.getGenerativeModel({
       model: "gemini-2.0-flash-exp",
       generationConfig: {
@@ -138,13 +154,22 @@ class GeminiEnhancedShotPlanner {
     });
   }
 
-  async analyzeUserInput(userInput: string): Promise<NarrativeAnalysis> {
+  async analyzeUserInput(userInput: string, referenceImages?: string[]): Promise<NarrativeAnalysis> {
     console.log('🧠 使用Gemini 2.5 Flash进行深度叙事分析...');
 
+    // 步骤1：如果用户上传了参考图片，提取身份锚点和主体信息
+    let imageAnalysis: ImageAnalysisResult | null = null;
+    if (referenceImages && referenceImages.length > 0) {
+      console.log(`🖼️ 检测到 ${referenceImages.length} 张参考图片，提取身份锚点...`);
+      imageAnalysis = await this.analyzeReferenceImages(referenceImages);
+    }
+
+    // 步骤2：进行叙事分析
     const analysisPrompt = `
 你是世界级的电影叙事分析专家。请深度分析以下用户的视频生成需求：
 
 用户输入："${userInput}"
+${imageAnalysis ? `\n**参考图片身份锚点**：${imageAnalysis.identityAnchors}\n\n⚠️ 重要：用户上传了参考图片。在分析角色/产品时，请基于上述身份锚点进行描述，确保所有镜头中的主体保持一致。` : ''}
 
 请提供专业的叙事结构分析，输出严格的JSON格式：
 
@@ -210,12 +235,22 @@ class GeminiEnhancedShotPlanner {
       const cleanedContent = content.replace(/```json\n?/g, "").replace(/```/g, "").trim();
       const analysis = JSON.parse(cleanedContent) as NarrativeAnalysis;
 
+      // 将图片分析结果添加到分析结果中
+      if (imageAnalysis) {
+        analysis.identity_anchors = imageAnalysis.identityAnchors;
+        analysis.subject_type = imageAnalysis.subjectType;
+        analysis.subject_descriptor = imageAnalysis.subjectDescriptor;
+      }
+
       console.log('✅ 叙事分析完成:', {
         genre: analysis.genre,
         structure: analysis.narrative_structure,
         charactersCount: analysis.characters?.length || 0,
         emotionalPoints: analysis.emotional_arc?.length || 0,
-        visualStyle: analysis.visual_style?.cinematography_style
+        visualStyle: analysis.visual_style?.cinematography_style,
+        hasIdentityAnchors: !!imageAnalysis,
+        subjectType: analysis.subject_type,
+        subjectDescriptor: analysis.subject_descriptor
       });
 
       return analysis;
@@ -226,16 +261,139 @@ class GeminiEnhancedShotPlanner {
     }
   }
 
+  /**
+   * 提取参考图片的身份锚点（Identity Anchors）
+   *
+   * 基于 VEO 3.1 最佳实践 (2025):
+   * - 只提取主体的持久化特征（颜色、材质、风格等）
+   * - 不描述场景、光照、构图
+   * - 使用通用术语（"the subject", "the product", "the character"）
+   * - 生成可在所有镜头中重复使用的描述
+   */
+  private async analyzeReferenceImages(imageUrls: string[]): Promise<ImageAnalysisResult | null> {
+    try {
+      // 下载第一张图片（主要参考）
+      const imageUrl = imageUrls[0];
+      console.log(`🔍 提取参考图片的身份锚点: ${imageUrl}`);
+
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) {
+        console.warn(`⚠️ 无法下载参考图片: ${imageResponse.statusText}`);
+        return null;
+      }
+
+      const imageBuffer = await imageResponse.arrayBuffer();
+      const base64Image = Buffer.from(imageBuffer).toString('base64');
+
+      // 使用Gemini Vision提取身份锚点
+      const analysisPrompt = `Analyze this image and extract the subject's identity information for video generation.
+
+**TASK 1: Identify Subject Type and Descriptor**
+First, determine:
+1. **Is it a PERSON or an OBJECT?**
+2. **Provide a SHORT descriptor for Shot 1 prefix**:
+   - If PERSON: Use "the man", "the woman", "the boy", "the girl", "the people", or "the person"
+   - If OBJECT: Use the specific object name (e.g., "necklace", "sports car", "coffee cup", "handbag")
+
+**TASK 2: Extract Identity Anchors**
+Then provide detailed identity anchors following VEO 3.1 best practices:
+- Focus ONLY on the main subject (person, product, or object)
+- Extract persistent identity features that remain constant across video shots
+- DO NOT describe scene, lighting, camera angle, or composition
+- DO NOT describe actions or movements
+
+**Key Physical Features to extract**:
+   - For products: material, color, shape, design style, distinctive details
+   - For people: gender, approximate age, hair (color, length, style), clothing (type, color)
+   - For objects: color, material, size category, distinctive patterns
+
+**Output format** (strict JSON):
+{
+  "subject_type": "person" or "object",
+  "subject_descriptor": "the woman" or "necklace" (SHORT descriptor for Shot 1),
+  "identity_anchors": "The subject is a [type] with [key feature 1], [key feature 2], [key feature 3]. Notable characteristics: [distinctive detail 1], [distinctive detail 2]."
+}
+
+**Example outputs**:
+{
+  "subject_type": "object",
+  "subject_descriptor": "necklace",
+  "identity_anchors": "The product is a diamond necklace with graduated sizing, silver platinum chain, and brilliant-cut stones. Notable characteristics: intricate metalwork, sparkling facets."
+}
+
+{
+  "subject_type": "person",
+  "subject_descriptor": "the woman",
+  "identity_anchors": "The character is a woman in her late 20s with shoulder-length wavy black hair, wearing a green bomber jacket and gold hoop earrings. Notable characteristics: confident posture, natural makeup."
+}
+
+{
+  "subject_type": "object",
+  "subject_descriptor": "sports car",
+  "identity_anchors": "The subject is a red sports car with sleek aerodynamic design, glossy paint finish, and distinctive front grille. Notable characteristics: low profile, aggressive styling."
+}
+
+Provide ONLY the JSON output, nothing else.`;
+
+      const visionResult = await this.visionModel.generateContent([
+        analysisPrompt,
+        {
+          inlineData: {
+            data: base64Image,
+            mimeType: imageResponse.headers.get('content-type') || 'image/jpeg'
+          }
+        }
+      ]);
+
+      const responseText = visionResult.response.text().trim();
+      
+      // 清理JSON响应
+      const cleanedResponse = responseText.replace(/```json\n?/g, "").replace(/```/g, "").trim();
+      const analysisResult = JSON.parse(cleanedResponse);
+      
+      console.log(`✅ 图片分析完成:`, {
+        subjectType: analysisResult.subject_type,
+        descriptor: analysisResult.subject_descriptor,
+        anchors: analysisResult.identity_anchors.substring(0, 100) + '...'
+      });
+
+      return {
+        identityAnchors: analysisResult.identity_anchors,
+        subjectType: analysisResult.subject_type,
+        subjectDescriptor: analysisResult.subject_descriptor
+      };
+    } catch (error) {
+      console.error('❌ 身份锚点提取失败:', error);
+      return null;
+    }
+  }
+
   async generateEnhancedScenes(
     analysis: NarrativeAnalysis,
     targetDuration: number,
-    ratio: string
+    ratio: string,
+    hasUserUploadedImage: boolean = false
   ): Promise<EnhancedScenePlan[]> {
     console.log('🎬 使用Gemini 2.5 Flash生成增强场景规划...');
 
     // 计算合理的场景数量
     const segmentCount = this.calculateOptimalSegments(targetDuration);
     const segmentDuration = targetDuration / segmentCount;
+
+    // 如果有身份锚点，生成特殊指令
+    const identityAnchorsNote = analysis.identity_anchors ? `
+⚠️ **CRITICAL - IDENTITY ANCHORS (Character/Product Consistency)**:
+${analysis.identity_anchors}
+
+**MANDATORY REQUIREMENTS for ALL scenes**:
+1. Include the identity anchor description in EVERY scene prompt
+2. Use consistent descriptor: "${analysis.identity_anchors.split('.')[0]}." at the start of each scene
+3. Maintain visual consistency: same colors, same materials, same distinctive features
+4. Example: "${analysis.identity_anchors.split('.')[0]}. Camera slowly zooms in..."
+5. DO NOT alter or reinterpret the subject's appearance across scenes
+
+This ensures VEO 3.1 generates consistent subject appearance across all video segments.
+` : '';
 
     const scenePrompt = `
 基于以下深度叙事分析，生成${segmentCount}个高质量的视频场景分镜计划：
@@ -248,6 +406,7 @@ ${JSON.stringify(analysis, null, 2)}
 - 场景数量：${segmentCount}个
 - 每段平均时长：${segmentDuration.toFixed(1)}秒
 - 视频比例：${ratio}
+${identityAnchorsNote}
 
 请生成详细的场景分镜计划，输出JSON格式：
 
@@ -481,21 +640,32 @@ ${JSON.stringify(scenes, null, 2)}
 export async function generateEnhancedShotPlan(
   userPrompt: string,
   targetSeconds: number = 30,
-  ratio: string = '1280:768'
+  ratio: string = '1280:768',
+  referenceImages?: string[] // 新增：用户上传的参考图片
 ): Promise<ShotPlan> {
   console.log(`🚀 启动Gemini 2.5 Flash增强叙事分解器`);
   console.log(`📝 处理输入: "${userPrompt}" (${targetSeconds}s, ${ratio})`);
 
+  if (referenceImages && referenceImages.length > 0) {
+    console.log(`🖼️ 检测到 ${referenceImages.length} 张参考图片，将在镜头规划中使用`);
+  }
+
   const planner = new GeminiEnhancedShotPlanner();
 
   try {
-    // 步骤1：深度叙事分析
+    // 步骤1：深度叙事分析（包含参考图片分析）
     console.log('🧠 第一步：深度叙事分析');
-    const narrativeAnalysis = await planner.analyzeUserInput(userPrompt);
+    const narrativeAnalysis = await planner.analyzeUserInput(userPrompt, referenceImages);
 
     // 步骤2：生成增强场景计划
     console.log('🎬 第二步：生成增强场景计划');
-    const scenePlans = await planner.generateEnhancedScenes(narrativeAnalysis, targetSeconds, ratio);
+    const hasUserUploadedImage = (referenceImages && referenceImages.length > 0);
+    const scenePlans = await planner.generateEnhancedScenes(
+      narrativeAnalysis,
+      targetSeconds,
+      ratio,
+      hasUserUploadedImage
+    );
 
     // 步骤3：优化视觉一致性
     console.log('🔄 第三步：优化视觉一致性');
@@ -503,12 +673,23 @@ export async function generateEnhancedShotPlan(
 
     // 步骤4：转换为标准输出格式
     console.log('📋 第四步：格式化输出');
-    const shots = optimizedScenes.map((scene, index) => ({
-      id: index + 1,
-      prompt: scene.runway_prompt,
-      duration_s: Math.round(scene.duration_seconds),
-      camera: scene.camera_movement.description || scene.camera_movement.type
-    }));
+    const shots = optimizedScenes.map((scene, index) => {
+      let prompt = scene.runway_prompt;
+      
+      // 如果是 shot 1 且有参考图片，在提示词前面强行加入主体描述 + "based on the picture uploaded as reference"
+      if (index === 0 && narrativeAnalysis.subject_descriptor) {
+        const prefix = `${narrativeAnalysis.subject_descriptor} based on the picture uploaded as reference, `;
+        prompt = prefix + prompt;
+        console.log(`✨ Shot 1 添加参考图片前缀: "${prefix}"`);
+      }
+      
+      return {
+        id: index + 1,
+        prompt: prompt,
+        duration_s: Math.round(scene.duration_seconds),
+        camera: scene.camera_movement.description || scene.camera_movement.type
+      };
+    });
 
     const totalDuration = shots.reduce((sum, shot) => sum + shot.duration_s, 0);
 
@@ -522,6 +703,7 @@ export async function generateEnhancedShotPlan(
       totalShots: shots.length,
       totalDuration: totalDuration,
       averageQuality: "enhanced",
+      hasImageToVideo: hasUserUploadedImage,
       shots: shots.map(s => ({ id: s.id, duration: s.duration_s, camera: s.camera }))
     });
 

@@ -51,15 +51,20 @@ export interface ShotPlan {
 export async function generateShotPlan(
   userPrompt: string,
   targetSeconds: number = 30,
-  ratio: string = '1280:768'
+  ratio: string = '1280:768',
+  referenceImages?: string[] // 新增：参考图片
 ): Promise<ShotPlan> {
   console.log(`🎬 Generating shot plan for: "${userPrompt}" (${targetSeconds}s, ${ratio})`);
+
+  if (referenceImages && referenceImages.length > 0) {
+    console.log(`🖼️ Shot planning with ${referenceImages.length} reference image(s)`);
+  }
 
   // 尝试使用最新的Gemini 2.5 Flash增强方案
   try {
     console.log('🚀 Trying enhanced Gemini 2.5 Flash agent first...');
     const { generateEnhancedShotPlan } = await import("./gemini-enhanced-planner");
-    const enhancedPlan = await generateEnhancedShotPlan(userPrompt, targetSeconds, ratio);
+    const enhancedPlan = await generateEnhancedShotPlan(userPrompt, targetSeconds, ratio, referenceImages);
 
     // 验证增强方案返回的结构
     if (enhancedPlan && enhancedPlan.shots && Array.isArray(enhancedPlan.shots)) {
@@ -75,6 +80,10 @@ export async function generateShotPlan(
 
   } catch (enhancedError) {
     console.error('❌ Gemini 2.5 Flash enhanced agent failed, falling back to basic Gemini:', enhancedError);
+
+    if (referenceImages && referenceImages.length > 0) {
+      console.warn('⚠️ Reference images were provided but enhanced planner failed. Fallback planners do not support reference images.');
+    }
 
     // 降级方案1：尝试Gemini
     try {

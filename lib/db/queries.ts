@@ -1,11 +1,12 @@
 // 统一的 Supabase 查询层 - 单一数据库架构
 import { createSupabaseServer } from '@/lib/supabase/server';
-import { User } from '@supabase/supabase-js';
+import { User, SupabaseClient } from '@supabase/supabase-js';
 
 export interface Profile {
   id: string;
   email: string;
   name: string | null;
+  gender: string | null;
   role: string;
   created_at: string;
   updated_at: string;
@@ -94,16 +95,18 @@ export async function getUserProfile(userId?: string): Promise<Profile | null> {
 
 /**
  * 获取用户的团队（第一个团队）
+ * @param providedUser - 可选的已认证用户对象，用于支持Bearer token认证（移动端）
+ * @param providedSupabase - 可选的已认证 Supabase 客户端，用于确保正确的认证上下文
  */
-export async function getTeamForUser(): Promise<any | null> {
-  const user = await getUser();
+export async function getTeamForUser(providedUser?: User | null, providedSupabase?: SupabaseClient): Promise<any | null> {
+  const user = providedUser || await getUser();
   if (!user) {
     console.log('getTeamForUser: No user found');
     return null;
   }
   
   console.log('getTeamForUser: Looking for team for user:', user.id);
-  const supabase = await createSupabaseServer();
+  const supabase = providedSupabase || await createSupabaseServer();
   
   try {
     // 简化查询，只获取团队基本信息
@@ -140,12 +143,14 @@ export async function getTeamForUser(): Promise<any | null> {
     // 优先级策略：
     // 1. 有活跃订阅的团队（subscription_status = 'active' 或 'trialing'）
     // 2. 最新创建的团队
-    const activeTeam = allTeams.find(tm => 
-      tm.teams && 
-      (tm.teams.subscription_status === 'active' || tm.teams.subscription_status === 'trialing')
-    );
-    
-    const selectedTeam = activeTeam ? activeTeam.teams : allTeams[0].teams;
+    const activeTeam = allTeams.find(tm => {
+      if (!tm.teams) return false;
+      const teamData = Array.isArray(tm.teams) ? tm.teams[0] : tm.teams;
+      return teamData && (teamData.subscription_status === 'active' || teamData.subscription_status === 'trialing');
+    });
+
+    const selectedTeamRaw = activeTeam ? activeTeam.teams : allTeams[0].teams;
+    const selectedTeam = selectedTeamRaw ? (Array.isArray(selectedTeamRaw) ? selectedTeamRaw[0] : selectedTeamRaw) : null;
     
     console.log('getTeamForUser: Found', allTeams.length, 'teams, selected team:', selectedTeam?.id, 'with plan:', selectedTeam?.plan_name, 'status:', selectedTeam?.subscription_status);
     
@@ -196,25 +201,40 @@ export async function getTeamByStripeCustomerId(customerId: string): Promise<Tea
 export async function updateTeamSubscription(
   teamId: number,
   subscriptionData: {
-    stripeSubscriptionId: string | null;
-    stripeProductId: string | null;
-    planName: string | null;
-    subscriptionStatus: string;
+    stripeSubscriptionId?: string | null;
+    stripeProductId?: string | null;
+    planName?: string | null;
+    subscriptionStatus?: string;
+    subscriptionExpiresAt?: Date | null;
   }
 ) {
   const supabase = await createSupabaseServer();
-  
+
+  const updateData: any = {
+    updated_at: new Date().toISOString()
+  };
+
+  if (subscriptionData.stripeSubscriptionId !== undefined) {
+    updateData.stripe_subscription_id = subscriptionData.stripeSubscriptionId;
+  }
+  if (subscriptionData.stripeProductId !== undefined) {
+    updateData.stripe_product_id = subscriptionData.stripeProductId;
+  }
+  if (subscriptionData.planName !== undefined) {
+    updateData.plan_name = subscriptionData.planName;
+  }
+  if (subscriptionData.subscriptionStatus !== undefined) {
+    updateData.subscription_status = subscriptionData.subscriptionStatus;
+  }
+  if (subscriptionData.subscriptionExpiresAt !== undefined) {
+    updateData.subscription_expires_at = subscriptionData.subscriptionExpiresAt?.toISOString() || null;
+  }
+
   const { error } = await supabase
     .from('teams')
-    .update({
-      stripe_subscription_id: subscriptionData.stripeSubscriptionId,
-      stripe_product_id: subscriptionData.stripeProductId,
-      plan_name: subscriptionData.planName,
-      subscription_status: subscriptionData.subscriptionStatus,
-      updated_at: new Date().toISOString()
-    })
+    .update(updateData)
     .eq('id', teamId);
-    
+
   if (error) {
     console.error('Failed to update team subscription:', error);
     throw error;
@@ -346,9 +366,10 @@ export async function getTeamCredits(teamId: number): Promise<CreditBalance | nu
 
 /**
  * 获取当前用户团队的信用点余额
+ * @param providedUser - 可选的已认证用户对象，用于支持Bearer token认证（移动端）
  */
-export async function getUserTeamCredits(): Promise<CreditBalance | null> {
-  const team = await getTeamForUser();
+export async function getUserTeamCredits(providedUser?: User | null): Promise<CreditBalance | null> {
+  const team = await getTeamForUser(providedUser);
   if (!team) return null;
   
   return await getTeamCredits(team.id);
@@ -468,9 +489,11 @@ export async function getTeamCreditHistory(teamId: number, limit: number = 20) {
 
 /**
  * 获取当前用户团队的信用点交易历史
+ * @param limit - 限制返回记录数
+ * @param providedUser - 可选的已认证用户对象，用于支持Bearer token认证（移动端）
  */
-export async function getUserTeamCreditHistory(limit: number = 20) {
-  const team = await getTeamForUser();
+export async function getUserTeamCreditHistory(limit: number = 20, providedUser?: User | null) {
+  const team = await getTeamForUser(providedUser);
   if (!team) return [];
   
   return await getTeamCreditHistory(team.id, limit);
@@ -506,9 +529,10 @@ export async function getTeamSubscriptionInfo(teamId: number) {
 
 /**
  * 获取当前用户团队的订阅信息
+ * @param providedUser - 可选的已认证用户对象，用于支持Bearer token认证（移动端）
  */
-export async function getUserTeamSubscriptionInfo() {
-  const team = await getTeamForUser();
+export async function getUserTeamSubscriptionInfo(providedUser?: User | null) {
+  const team = await getTeamForUser(providedUser);
   if (!team) return null;
   
   return await getTeamSubscriptionInfo(team.id);
@@ -549,12 +573,20 @@ export async function getUserWithTeam(userId?: string): Promise<{
   if (error || !data || !data.profiles || !data.teams) {
     return null;
   }
-  
+
+  // Handle Supabase foreign key array/object type
+  const profile = Array.isArray(data.profiles) ? data.profiles[0] : data.profiles;
+  const team = Array.isArray(data.teams) ? data.teams[0] : data.teams;
+
+  if (!profile || !team) {
+    return null;
+  }
+
   return {
-    id: data.profiles.id,
-    email: data.profiles.email,
-    name: data.profiles.name,
-    teamId: data.teams.id,
+    id: profile.id,
+    email: profile.email,
+    name: profile.name,
+    teamId: team.id,
     role: data.role
   };
 }
@@ -588,14 +620,15 @@ export async function logActivity(
 
 /**
  * 获取活动日志
+ * @param providedUser - 可选的已认证用户对象，用于支持Bearer token认证（移动端）
  */
-export async function getActivityLogs() {
-  const user = await getUser();
+export async function getActivityLogs(providedUser?: User | null) {
+  const user = providedUser || await getUser();
   if (!user) {
     throw new Error('User not authenticated');
   }
 
-  const team = await getTeamForUser();
+  const team = await getTeamForUser(user);
   if (!team) {
     return [];
   }

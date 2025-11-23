@@ -16,32 +16,40 @@ export const SUPPORTED_LANGUAGES = [
   { code: 'en' as SupportedLanguage, name: 'English', flag: '🇺🇸' },
   { code: 'zh' as SupportedLanguage, name: '中文', flag: '🇨🇳' },
   { code: 'ja' as SupportedLanguage, name: '日本語', flag: '🇯🇵' },
+  { code: 'ko' as SupportedLanguage, name: '한국어', flag: '🇰🇷' },
+  { code: 'fr' as SupportedLanguage, name: 'Français', flag: '🇫🇷' },
+  { code: 'es' as SupportedLanguage, name: 'Español', flag: '🇪🇸' },
+  { code: 'de' as SupportedLanguage, name: 'Deutsch', flag: '🇩🇪' },
 ];
 
 // 检测浏览器语言
 function detectBrowserLanguage(): SupportedLanguage {
   if (typeof window === 'undefined') return 'en';
-  
+
   const browserLang = navigator.language.toLowerCase();
-  
+
   if (browserLang.startsWith('zh')) return 'zh';
   if (browserLang.startsWith('ja')) return 'ja';
+  if (browserLang.startsWith('ko')) return 'ko';
+  if (browserLang.startsWith('fr')) return 'fr';
+  if (browserLang.startsWith('es')) return 'es';
+  if (browserLang.startsWith('de')) return 'de';
   return 'en';
 }
 
 // 从本地存储获取语言设置
 function getStoredLanguage(): SupportedLanguage | null {
   if (typeof window === 'undefined') return null;
-  
+
   try {
     const stored = localStorage.getItem('monna-language');
-    if (stored && ['en', 'zh', 'ja'].includes(stored)) {
+    if (stored && ['en', 'zh', 'ja', 'ko', 'fr', 'es', 'de'].includes(stored)) {
       return stored as SupportedLanguage;
     }
   } catch (error) {
     console.warn('Failed to read language from localStorage:', error);
   }
-  
+
   return null;
 }
 

@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 import { putAndGetUrl, putAndGetPublicUrl } from "@/lib/storage";
 import crypto from "crypto";
 
@@ -207,38 +207,86 @@ export async function generateImageGemini(prompt: string, referenceImageUrl?: st
  * 使用Gemini生成结构化的镜头规划JSON
  */
 export async function generateShotPlanWithGemini(
-  userPrompt: string, 
-  targetSeconds: number = 30, 
+  userPrompt: string,
+  targetSeconds: number = 30,
   ratio: string = '1280:768'
 ): Promise<any> {
   console.log(`🎬 Generating shot plan with Gemini for: "${userPrompt}" (${targetSeconds}s, ${ratio})`);
-  
-  try {
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.5-flash", // 使用最新的Gemini模型
-      generationConfig: {
-        temperature: 0.7,
-        topP: 0.8,
-        topK: 40,
-        maxOutputTokens: 4096, // 增加输出长度限制
-      }
-    });
-        const systemPrompt = `You are a professional cinematographer. Break down the user's high-level prompt into coherent shot sequences.
 
-Requirements:
-1. Follow Runway model duration constraints: gen4_turbo recommends 5s or 10s per segment
-2. Total duration should approach target_seconds, ensure narrative continuity and subject consistency between shots
-3. Use positive phrasing only: prompts that describe what should happen in shot
-4. Maintain character and scene consistency
-5. ALL shot prompts MUST be in English for video generation model compatibility
-6. Use direct, simple, and easily understood prompts (max 50 words per shot to avoid Runway errors)
-7. Focus on describing the motion, rather than the input image:Both text and image inputs are considered part of your prompt. Reiterating elements that exist within the image in high detail can lead to reduced motion or unexpected results in the output.
-8. Use basic camera terms: "static", "handheld", "tracking"
-9. Focus on concrete visual elements, not abstract concepts
-10. Avoid conversational or command-based prompts:describe how the elements should appear or disappear from the scene
-11. Avoid overly complex prompts: simple description of the desired motion for a single scene
-12. AVOID words that might trigger content policies: "spiritual", "energy", "pulsating", "mystical", "magical", "ethereal"
-13. Use realistic, grounded descriptions instead of fantasy elements
+  // 重试逻辑：处理503服务过载错误
+  const maxRetries = 3;
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 1) {
+        const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // 指数退避，最多10秒
+        console.log(`⏳ Retry attempt ${attempt}/${maxRetries}, waiting ${waitTime}ms...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.5-flash", // 使用最新的Gemini模型
+        generationConfig: {
+          temperature: 0.7,
+          topP: 0.8,
+          topK: 40,
+          maxOutputTokens: 4096, // 增加输出长度限制
+          responseMimeType: "application/json", // 强制返回JSON格式
+        },
+        safetySettings: [
+          {
+            category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+            threshold: HarmBlockThreshold.BLOCK_NONE,
+          },
+          {
+            category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            threshold: HarmBlockThreshold.BLOCK_NONE,
+          },
+          {
+            category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            threshold: HarmBlockThreshold.BLOCK_NONE,
+          },
+          {
+            category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            threshold: HarmBlockThreshold.BLOCK_NONE,
+          },
+        ],
+      });
+        const systemPrompt = `You are a professional cinematographer specializing in commercial advertising. Break down the user's high-level prompt into coherent, flowing shot sequences that tell a unified story.
+
+CRITICAL REQUIREMENTS FOR VIDEO CONTINUITY:
+1. VEO 3.1 generates 8-second video segments and uses VIDEO EXTENSION for continuity
+2. Each shot CONTINUES from the previous shot's ending frame - NOT independent scenes
+3. Shots must flow naturally: same character, same outfit, same location, continuous action
+4. Think of it as ONE continuous video split into 8-second chunks, NOT separate scenes
+
+CHARACTER & OBJECT CONSISTENCY:
+5. Extract the MAIN CHARACTER description from user prompt (age, gender, appearance, clothing)
+6. Extract the MAIN OBJECT/PRODUCT description (detailed visual features, color, style)
+7. Use the EXACT SAME character and object description in EVERY shot prompt
+8. Focus on camera movement and action progression, NOT repeating character appearance
+9. For product advertising: ensure the product is VISIBLE and RECOGNIZABLE in every shot
+
+SHOT PLANNING PRINCIPLES:
+10. Create a CONTINUOUS narrative flow: Shot 1 → Shot 2 → Shot 3 (seamless transitions)
+11. Use smooth camera movements: slow pan, gentle zoom, tracking shot, rotating camera
+12. Maintain spatial continuity: if character is on the left in Shot 1, keep them on the left in Shot 2
+13. Progress the story: Opening → Product showcase → Detail close-up → Emotional finale
+14. Each shot should feel like the NEXT moment, not a new scene
+
+TECHNICAL CONSTRAINTS:
+15. ALL shot prompts MUST be in English for VEO 3.1 compatibility
+16. Keep prompts simple and direct (max 40 words per shot)
+17. Use realistic, grounded descriptions (avoid "magical", "spiritual", "mystical", "ethereal")
+18. Use basic camera terms: "close-up", "medium shot", "wide shot", "tracking", "static"
+19. Total duration should approach target_seconds
+
+EXAMPLE for jewelry ad:
+Shot 1: "Close-up of a young woman's hand gently touching an elegant diamond necklace on her neck, soft studio lighting, white background"
+Shot 2: "The camera slowly pulls back, revealing the woman's face as she smiles softly, still wearing the same diamond necklace, white background"
+Shot 3: "Medium shot of the woman turning her head slightly left, the diamond necklace catches light and sparkles, white background"
+Shot 4: "The woman looks directly at camera with a confident smile, the diamond necklace prominently displayed, white background"
 
 Output strictly in the following JSON format with NO other text:
 
@@ -259,7 +307,17 @@ Output strictly in the following JSON format with NO other text:
 Target Duration (seconds): ${targetSeconds}
 Aspect Ratio: ${ratio}
 
-Please break down this prompt into multiple coherent shots, ensuring the total duration meets the target requirement. Remember: ALL shot descriptions must be in English.`;
+INSTRUCTIONS:
+1. Identify the MAIN CHARACTER (person/model) from the user prompt - extract their appearance details
+2. Identify the MAIN PRODUCT/OBJECT (jewelry, clothing, item) - extract its visual features
+3. Create a shot sequence where:
+   - Every shot includes the SAME character and SAME product
+   - Each shot continues naturally from the previous one (like a single continuous video)
+   - Camera moves smoothly to show different angles and details
+   - Product is always visible and recognizable
+4. Remember: ALL shot descriptions must be in English.
+
+Please break down this prompt into multiple coherent shots that flow together seamlessly.`;
 
     const result = await model.generateContent([
       { text: systemPrompt },
@@ -267,33 +325,82 @@ Please break down this prompt into multiple coherent shots, ensuring the total d
     ]);
 
     const response = await result.response;
+
+    // 检查安全过滤和阻止原因
+    if (response.promptFeedback?.blockReason) {
+      console.error('❌ Gemini blocked request:', response.promptFeedback.blockReason);
+      throw new Error(`Gemini安全过滤拦截: ${response.promptFeedback.blockReason}`);
+    }
+
+    // 检查候选响应
+    if (!response.candidates || response.candidates.length === 0) {
+      console.error('❌ No candidates in Gemini response');
+      throw new Error('Gemini没有返回任何候选结果');
+    }
+
+    const candidate = response.candidates[0];
+
+    // 检查完成原因
+    if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+      console.warn(`⚠️ Gemini finish reason: ${candidate.finishReason}`);
+      if (candidate.finishReason === 'SAFETY') {
+        throw new Error('Gemini因安全原因停止生成');
+      }
+    }
+
     const text = response.text();
-    
-    console.log('🤖 Gemini raw response:', text);
+
+    console.log('🤖 Gemini raw response length:', text.length);
+    console.log('🤖 Gemini raw response preview:', text.substring(0, 500));
+
+    // 检查是否有响应
+    if (!text || text.trim().length === 0) {
+      console.error('❌ Gemini returned empty response');
+      console.error('Finish reason:', candidate.finishReason);
+      console.error('Safety ratings:', JSON.stringify(candidate.safetyRatings, null, 2));
+      throw new Error('Gemini返回空响应，可能是安全过滤或API限制');
+    }
 
     // 尝试解析JSON
     let plan;
     try {
-      // 清理响应文本，移除可能的markdown代码块标记
+      // 由于设置了 responseMimeType: "application/json"，响应应该已经是纯JSON
+      // 但仍然清理可能的markdown代码块标记（以防万一）
       let cleanText = text.replace(/```json\s*|\s*```/g, '').trim();
-      
-      // 检查JSON是否被截断，如果是则尝试修复
-      if (!cleanText.endsWith('}') && !cleanText.endsWith(']}')) {
-        console.warn('⚠️ Detected truncated JSON, attempting to fix...');
-        
-        // 找到最后一个完整的镜头对象
-        const lastCompleteShot = cleanText.lastIndexOf('    }');
-        if (lastCompleteShot !== -1) {
-          // 截取到最后一个完整镜头，然后补全JSON结构
-          cleanText = cleanText.substring(0, lastCompleteShot + 5) + '\n  ]\n}';
-          console.log('🔧 Repaired JSON structure');
+
+      // 再次检查清理后的文本
+      if (!cleanText || cleanText.length === 0) {
+        throw new Error('清理后的文本为空');
+      }
+
+      console.log('📝 Attempting to parse JSON, length:', cleanText.length);
+
+      // 直接尝试解析
+      try {
+        plan = JSON.parse(cleanText);
+        console.log('✅ JSON parsed successfully');
+      } catch (parseError) {
+        console.error('❌ Initial JSON parse failed:', parseError);
+
+        // 检查JSON是否被截断，如果是则尝试修复
+        if (!cleanText.endsWith('}') && !cleanText.endsWith(']}')) {
+          console.warn('⚠️ Detected truncated JSON, attempting to fix...');
+
+          // 找到最后一个完整的镜头对象
+          const lastCompleteShot = cleanText.lastIndexOf('    }');
+          if (lastCompleteShot !== -1) {
+            // 截取到最后一个完整镜头，然后补全JSON结构
+            cleanText = cleanText.substring(0, lastCompleteShot + 5) + '\n  ]\n}';
+            console.log('🔧 Repaired JSON structure');
+            plan = JSON.parse(cleanText);
+          } else {
+            // 如果找不到完整的镜头，使用降级方案
+            throw parseError; // 抛出原始错误
+          }
         } else {
-          // 如果找不到完整的镜头，使用降级方案
-          throw new Error('JSON截断严重，无法修复');
+          throw parseError;
         }
       }
-      
-      plan = JSON.parse(cleanText);
     } catch (parseError) {
       console.error('❌ Failed to parse Gemini JSON response:', parseError);
       console.error('Raw text:', text);
@@ -343,17 +450,608 @@ Please break down this prompt into multiple coherent shots, ensuring the total d
       });
     }
 
-    console.log(`📋 Generated shot plan with Gemini:`, {
-      totalShots: plan.shots?.length || 0,
-      totalDuration: plan.shots?.reduce((sum: number, shot: any) => sum + shot.duration_s, 0) || 0,
-      shots: plan.shots?.map((s: any) => ({ id: s.id, duration: s.duration_s, camera: s.camera })) || []
+      console.log(`📋 Generated shot plan with Gemini:`, {
+        totalShots: plan.shots?.length || 0,
+        totalDuration: plan.shots?.reduce((sum: number, shot: any) => sum + shot.duration_s, 0) || 0,
+        shots: plan.shots?.map((s: any) => ({ id: s.id, duration: s.duration_s, camera: s.camera })) || []
+      });
+
+      return plan;
+
+    } catch (error) {
+      lastError = error;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      // 检查是否是503服务过载错误
+      const is503Error = errorMessage.includes('503') || errorMessage.includes('overloaded');
+
+      if (is503Error && attempt < maxRetries) {
+        console.warn(`⚠️ Gemini API overloaded (attempt ${attempt}/${maxRetries}), retrying...`);
+        continue; // 重试
+      } else {
+        // 其他错误或已达到最大重试次数
+        console.error('❌ Gemini API failed:', error);
+        throw new Error(`Gemini镜头规划失败: ${errorMessage}`);
+      }
+    }
+  }
+
+  // 如果所有重试都失败
+  console.error('❌ All Gemini API retry attempts failed');
+  throw new Error(`Gemini镜头规划失败（已重试${maxRetries}次）: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+/**
+ * 使用 Google VEO 3.1 API 生成单个视频片段
+ * 基于最新的 Gemini API 文档: https://ai.google.dev/gemini-api/docs/video
+ * 使用 @google/genai SDK
+ */
+async function generateVideoWithVEO31(options: {
+  prompt: string;
+  aspectRatio?: "16:9" | "9:16";
+  image?: string; // 图生视频：将图片作为视频的第一帧
+  referenceImages?: string[]; // 参考图片：作为风格和内容的参考（不是第一帧）
+  previousVideo?: string; // 用于视频扩展（确保连续性）
+}): Promise<string> {
+  const { prompt, aspectRatio = "16:9", image, referenceImages, previousVideo } = options;
+
+  console.log("🎬 Generating video with VEO 3.1:", {
+    promptLength: prompt.length,
+    aspectRatio,
+    hasImage: !!image, // 图生视频模式
+    hasReferenceImages: !!referenceImages?.length,
+    hasPreviousVideo: !!previousVideo
+  });
+
+  try {
+    const API_KEY = process.env.GEMINI_API_KEY;
+    if (!API_KEY) {
+      throw new Error("GEMINI_API_KEY is not configured");
+    }
+
+    // 使用新的 @google/genai SDK
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({ apiKey: API_KEY });
+
+    const modelName = "veo-3.1-generate-preview"; // 使用 VEO 3.1 preview 模型
+
+    // 构建配置
+    const config: any = {
+      numberOfVideos: 1,
+      aspectRatio: aspectRatio,
+    };
+
+    // 构建请求参数 - 根据不同模式选择
+    const requestParams: any = {
+      model: modelName,
+      prompt: prompt,
+      config: config
+    };
+
+    // 模式优先级：
+    // 1. 图生视频（image）- 将图片作为视频第一帧
+    // 2. 视频扩展（previousVideo）- 从前一段视频继续
+    // 3. 参考图片（referenceImages）- 作为风格和内容的参考
+
+    if (image) {
+      // ✅ 图生视频模式：将用户上传的图片作为视频的第一帧
+      console.log(`🖼️➡️🎬 Image-to-video mode: using uploaded image as starting frame`);
+
+      const imageResponse = await fetch(image);
+      if (!imageResponse.ok) {
+        throw new Error(`Failed to fetch image: ${imageResponse.statusText}`);
+      }
+
+      const imageBuffer = await imageResponse.arrayBuffer();
+      const base64Image = Buffer.from(imageBuffer).toString('base64');
+      const mimeType = imageResponse.headers.get('content-type') || 'image/png';
+
+      // 添加image参数（作为视频的初始帧）
+      requestParams.image = {
+        imageBytes: base64Image,
+        mimeType: mimeType
+      };
+
+      console.log(`✅ Starting image prepared: ${mimeType}, size: ${imageBuffer.byteLength} bytes`);
+
+    } else if (previousVideo) {
+      // 视频扩展模式：使用前一个视频的最后一帧作为起点
+      console.log(`🎞️ Using video extension mode with previous video`);
+
+      const videoResponse = await fetch(previousVideo);
+      if (!videoResponse.ok) {
+        throw new Error(`Failed to fetch previous video: ${videoResponse.statusText}`);
+      }
+
+      const videoBuffer = await videoResponse.arrayBuffer();
+      const base64Video = Buffer.from(videoBuffer).toString('base64');
+      const mimeType = videoResponse.headers.get('content-type') || 'video/mp4';
+
+      requestParams.video = {
+        videoBytes: base64Video,
+        mimeType: mimeType
+      };
+
+      console.log(`✅ Previous video prepared for extension: ${mimeType}, size: ${videoBuffer.byteLength} bytes`);
+
+    } else if (referenceImages && referenceImages.length > 0) {
+      // 参考图片模式：作为风格和内容的参考（不是第一帧）
+      console.log(`🖼️ Adding ${referenceImages.length} reference image(s) as style guide`);
+
+      config.referenceImages = [];
+
+      // VEO 3.1 支持最多3张参考图片
+      for (let i = 0; i < Math.min(referenceImages.length, 3); i++) {
+        const imageUrl = referenceImages[i];
+        const imageResponse = await fetch(imageUrl);
+
+        if (!imageResponse.ok) {
+          console.warn(`⚠️ Failed to fetch reference image ${i + 1}, skipping`);
+          continue;
+        }
+
+        const imageBuffer = await imageResponse.arrayBuffer();
+        const base64Image = Buffer.from(imageBuffer).toString('base64');
+        const mimeType = imageResponse.headers.get('content-type') || 'image/png';
+
+        // 添加到 referenceImages 数组
+        config.referenceImages.push({
+          image: {
+            imageBytes: base64Image,
+            mimeType: mimeType
+          },
+          referenceType: "asset" // 角色/物体参考类型
+        });
+
+        console.log(`✅ Reference image ${i + 1} prepared: ${mimeType}, size: ${imageBuffer.byteLength} bytes`);
+      }
+    }
+
+    console.log("📤 Sending request to VEO 3.1 API via SDK");
+    console.log("🚀 Final request params:", {
+      model: requestParams.model,
+      promptLength: requestParams.prompt.length,
+      configKeys: Object.keys(requestParams.config),
+      hasImage: !!requestParams.image,
+      hasReferenceImages: !!requestParams.config.referenceImages,
+      referenceImagesCount: requestParams.config.referenceImages?.length || 0,
+      hasPreviousVideo: !!requestParams.video
     });
 
-    return plan;
-    
+    // 发起视频生成请求（返回一个长时间运行的操作）
+    let operation = await ai.models.generateVideos(requestParams);
+
+    console.log("⏳ Waiting for VEO 3.1 video generation to complete...");
+
+    // 轮询操作状态，直到视频生成完成
+    while (!operation.done) {
+      await new Promise((resolve) => setTimeout(resolve, 10000)); // 等待10秒
+      console.log("...Still generating VEO 3.1 video...");
+      operation = await ai.operations.getVideosOperation({ operation });
+    }
+
+    console.log("📋 VEO 3.1 video generation completed");
+
+    // 详细检查响应结构
+    console.log("🔍 Operation response structure:", {
+      hasResponse: !!operation.response,
+      hasError: !!operation.error,
+      hasMetadata: !!operation.metadata,
+      responseKeys: operation.response ? Object.keys(operation.response) : [],
+      errorKeys: operation.error ? Object.keys(operation.error) : [],
+      metadataKeys: operation.metadata ? Object.keys(operation.metadata) : [],
+      hasGeneratedVideos: !!operation.response?.generatedVideos,
+      operationName: operation.name,
+      operationDone: operation.done
+    });
+
+    // 先检查操作是否有错误
+    if (operation.error) {
+      console.error("❌ Operation completed with error:", JSON.stringify(operation.error, null, 2));
+
+      // 输出metadata以获取更多诊断信息
+      if (operation.metadata) {
+        console.error("📊 Operation metadata:", JSON.stringify(operation.metadata, null, 2));
+      }
+
+      throw new Error(`VEO 3.1 操作失败: ${operation.error.message || JSON.stringify(operation.error)}`);
+    }
+
+    // 检查响应
+    if (!operation.response) {
+      console.error("❌ No response in operation. Full operation object:");
+      console.error(JSON.stringify(operation, null, 2));
+      throw new Error("VEO 3.1 操作完成但没有响应对象");
+    }
+
+    if (!operation.response.generatedVideos) {
+      console.error("❌ No generatedVideos in response. Full response object:");
+      console.error(JSON.stringify(operation.response, null, 2));
+
+      // 如果有metadata，也输出
+      if (operation.metadata) {
+        console.error("📊 Operation metadata:", JSON.stringify(operation.metadata, null, 2));
+      }
+
+      throw new Error("VEO 3.1 响应中没有 generatedVideos 字段");
+    }
+
+    const videos = operation.response.generatedVideos;
+    if (videos.length === 0) {
+      console.error("❌ Empty generatedVideos array");
+      throw new Error("VEO 3.1 返回空的视频数组");
+    }
+
+    const video = videos[0];
+    console.log("📹 Video object structure:", {
+      hasVideo: !!video.video,
+      hasUri: !!video.video?.uri,
+      videoKeys: video.video ? Object.keys(video.video) : []
+    });
+
+    if (!video.video || !video.video.uri) {
+      console.error("❌ No video URI:", JSON.stringify(video, null, 2));
+      throw new Error("VEO 3.1 视频对象中没有 URI");
+    }
+
+    // 获取视频 URI（需要添加 API key）
+    const videoUri = `${video.video.uri}&key=${API_KEY}`;
+
+    console.log("📥 Downloading VEO 3.1 video from:", videoUri);
+
+    // 下载视频
+    const videoResponse = await fetch(videoUri);
+    if (!videoResponse.ok) {
+      throw new Error(`Failed to download VEO 3.1 video: ${videoResponse.statusText}`);
+    }
+
+    const videoBuffer = await videoResponse.arrayBuffer();
+    console.log(`💾 Storing VEO 3.1 video, size: ${videoBuffer.byteLength} bytes`);
+
+    // 存储到 Supabase
+    const fileName = `veo-3.1/${crypto.randomUUID()}.mp4`;
+    const videoUrl = await putAndGetUrl(
+      fileName,
+      new Uint8Array(videoBuffer),
+      'video/mp4'
+    );
+
+    console.log("✅ VEO 3.1 video generated and stored:", videoUrl);
+    return videoUrl;
+
   } catch (error) {
-    console.error('❌ Gemini API failed:', error);
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(`Gemini镜头规划失败: ${errorMessage}`);
+    console.error("❌ VEO 3.1 video generation failed:", error);
+
+    // 检查是否是429配额限制错误
+    const errorMessage = (error as Error).message || '';
+    const errorString = JSON.stringify(error);
+
+    if (errorString.includes('"code":429') || errorMessage.includes('quota') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
+      throw new Error(`VEO 3.1 API配额已用尽。请访问 https://ai.dev/usage 查看使用情况，或升级到付费套餐。建议等待24小时后重试。`);
+    }
+
+    throw new Error(`VEO 3.1视频生成失败: ${errorMessage}`);
+  }
+}
+
+/**
+ * 从用户提示词中提取角色描述
+ */
+function extractCharacterDescription(prompt: string): string | null {
+  // 寻找角色相关的描述
+  const characterKeywords = ['主角', '角色', '人物', '女性', '男性', '年轻', '老人', '孩子', 'character', 'person', 'woman', 'man', 'girl', 'boy'];
+
+  // 检查是否包含角色关键词
+  const hasCharacter = characterKeywords.some(keyword =>
+    prompt.toLowerCase().includes(keyword.toLowerCase())
+  );
+
+  if (!hasCharacter) {
+    return null;
+  }
+
+  // 提取角色相关的描述段落
+  // 寻找包含"主角"、"人物"等关键词的句子
+  const sentences = prompt.split(/[。\n，,;；]/);
+  const characterSentences = sentences.filter(s =>
+    characterKeywords.some(k => s.includes(k))
+  );
+
+  if (characterSentences.length === 0) {
+    return null;
+  }
+
+  // 组合角色描述
+  let characterDesc = characterSentences.join(', ').trim();
+
+  // 添加"正面全身照"提示，确保生成完整的角色参考图
+  characterDesc = `Full body portrait, front view, ${characterDesc}, high quality, detailed, professional photography, neutral background`;
+
+  return characterDesc;
+}
+
+/**
+ * 使用Gemini VEO 3.1生成长视频
+ */
+export interface GeminiLongVideoOptions {
+  prompt: string;
+  attachedImages: string[]; // 附加图片URL数组
+  jobId: string;
+  shotPlan?: any; // 可选的镜头规划
+  model?: string; // VEO模型版本，如 "veo-3.1"
+  onProgress?: (progress: { percentage: number; step: string; message: string }) => Promise<void>;
+}
+
+export async function generateLongVideoGemini(options: GeminiLongVideoOptions) {
+  const { prompt, attachedImages, jobId, shotPlan: providedShotPlan, model = "veo-3.1", onProgress } = options;
+
+  console.log("🎬 Starting Google VEO 3.1 long video generation:", {
+    jobId,
+    prompt: prompt.substring(0, 100) + "...",
+    imagesCount: attachedImages.length,
+    model,
+    hasShotPlan: !!providedShotPlan
+  });
+
+  try {
+    let shotPlan;
+
+    if (providedShotPlan) {
+      // 使用提供的镜头规划
+      shotPlan = providedShotPlan;
+      console.log("📋 Using provided shot plan:", {
+        totalShots: shotPlan.shots?.length || 0,
+        totalDuration: shotPlan.total_seconds || 0
+      });
+
+      await onProgress?.({
+        percentage: 5,
+        step: "使用确认规划",
+        message: "正在使用您确认的镜头规划..."
+      });
+    } else {
+      // 步骤1: 使用Gemini生成镜头规划
+      await onProgress?.({
+        percentage: 5,
+        step: "智能分析",
+        message: "正在使用AI分析提示词并规划镜头序列..."
+      });
+
+      // VEO 3.1 每段视频固定8秒，计算需要的镜头数
+      const targetDuration = 60; // 目标60秒
+      const segmentDuration = 8; // VEO 3.1 固定8秒
+      const targetShots = Math.ceil(targetDuration / segmentDuration);
+
+      shotPlan = await generateShotPlanWithGemini(prompt, targetDuration, "16:9");
+
+      console.log("📋 Generated shot plan:", {
+        totalShots: shotPlan.shots.length,
+        totalDuration: shotPlan.total_seconds,
+        shots: shotPlan.shots.map(s => ({ id: s.id, duration: s.duration_s }))
+      });
+    }
+
+    // 步骤2: 准备用户上传的图片（用于图生视频）
+    let userUploadedImages: string[] = [];
+    let aiGeneratedReferenceImages: string[] = [];
+
+    if (attachedImages && attachedImages.length > 0) {
+      // ✅ 用户上传了图片：用于图生视频（image-to-video）
+      userUploadedImages = attachedImages.slice(0, 1); // 只使用第一张作为视频起点
+      console.log(`🖼️ User uploaded ${attachedImages.length} image(s), will use first image for image-to-video`);
+    } else {
+      // ❌ 用户没有上传图片：纯文生视频（text-to-video）
+      console.log(`📝 No uploaded images, will use text-to-video mode`);
+
+      // 可选：从提示词中提取角色描述并生成参考图（用于保持连续性）
+      await onProgress?.({
+        percentage: 8,
+        step: "生成角色参考图",
+        message: "正在生成角色参考图以确保视频连贯性..."
+      });
+
+      const characterPrompt = extractCharacterDescription(prompt);
+      if (characterPrompt) {
+        console.log("🎨 Generating character reference image for consistency:", characterPrompt);
+
+        try {
+          const charImageResult = await generateImageGemini(characterPrompt);
+          aiGeneratedReferenceImages = [charImageResult.url];
+          console.log("✅ AI-generated reference image created:", charImageResult.url);
+        } catch (error) {
+          console.warn("⚠️ Failed to generate character reference, will proceed without:", error);
+        }
+      }
+    }
+
+    // 步骤3: 准备视频生成
+    await onProgress?.({
+      percentage: 10,
+      step: "准备生成",
+      message: "正在准备视频生成参数..."
+    });
+
+    // 步骤4: 按镜头顺序生成视频片段（使用角色参考图确保一致性）
+    const generatedSegments: string[] = [];
+    const totalShots = shotPlan.shots.length;
+
+    for (let i = 0; i < totalShots; i++) {
+      const shot = shotPlan.shots[i];
+      const progressBase = 15 + (i * 70) / totalShots;
+
+      await onProgress?.({
+        percentage: progressBase,
+        step: `生成镜头 ${i + 1}/${totalShots}`,
+        message: `正在生成镜头${i + 1}：8秒视频`
+      });
+
+      // 重试逻辑：每个镜头最多重试3次
+      let retryCount = 0;
+      const maxRetries = 3;
+      let segmentUrl: string | null = null;
+
+      while (retryCount < maxRetries && !segmentUrl) {
+        try {
+          const videoPrompt = shot.prompt;
+
+          if (retryCount > 0) {
+            console.log(`🔄 Retrying shot ${i + 1} (attempt ${retryCount + 1}/${maxRetries})...`);
+            await onProgress?.({
+              percentage: progressBase,
+              step: `重试镜头 ${i + 1}`,
+              message: `正在重试镜头${i + 1}（第${retryCount + 1}次尝试）...`
+            });
+            // 等待一段时间后重试，避免触发速率限制
+            await new Promise(resolve => setTimeout(resolve, 5000 * retryCount));
+          }
+
+          console.log(`📹 Generating VEO 3.1 segment ${i + 1}/${totalShots}:`, {
+            prompt: videoPrompt.substring(0, 100) + "...",
+            shotNumber: i + 1,
+            hasUserUploadedImages: userUploadedImages.length > 0,
+            hasAIGeneratedReference: aiGeneratedReferenceImages.length > 0,
+            attempt: retryCount + 1
+          });
+
+          // 🔑 关键策略：
+          // 1. 用户上传了图片：
+          //    - 第1个镜头：图生视频（image-to-video）- 使用用户上传的图片作为第一帧
+          //    - 第2+镜头：视频扩展（video extension）- 从前一段视频继续
+          // 2. 用户没上传图片：
+          //    - 第1个镜头：文生视频（text-to-video）或使用AI生成的参考图
+          //    - 第2+镜头：视频扩展（video extension）- 从前一段视频继续
+          //
+          // 注意：@google/genai SDK v1.13.0 不支持 video 参数
+          // 降级方案：Shot 2-4 使用用户上传的图片作为参考图（而不是视频扩展）
+          segmentUrl = await generateVideoWithVEO31({
+            prompt: videoPrompt,
+            aspectRatio: shotPlan.ratio === "768:1280" ? "9:16" : "16:9",
+            // ✅ 第1个镜头 + 用户上传了图片 = 图生视频（使用用户图片作为第一帧）
+            image: (i === 0 && userUploadedImages.length > 0)
+              ? userUploadedImages[0]
+              : undefined,
+            // ❌ SDK 不支持 previousVideo，暂时禁用
+            // previousVideo: (i > 0 && generatedSegments.length > 0)
+            //   ? generatedSegments[generatedSegments.length - 1]
+            //   : undefined,
+            // ✅ 降级方案：Shot 2-4 也使用用户上传的图片作为参考
+            referenceImages: (i > 0 && userUploadedImages.length > 0)
+              ? userUploadedImages
+              : (userUploadedImages.length === 0 && aiGeneratedReferenceImages.length > 0)
+              ? aiGeneratedReferenceImages
+              : undefined
+          });
+
+          console.log(`✅ Generated VEO 3.1 shot ${i + 1}/${totalShots}:`, segmentUrl);
+
+          await onProgress?.({
+            percentage: progressBase + (70 / totalShots),
+            step: `镜头 ${i + 1} 完成`,
+            message: `镜头${i + 1}生成完成`
+          });
+
+        } catch (error) {
+          retryCount++;
+          console.error(`❌ Failed to generate shot ${i + 1} (attempt ${retryCount}/${maxRetries}):`, error);
+
+          // 如果已经达到最大重试次数，抛出错误
+          if (retryCount >= maxRetries) {
+            throw new Error(`镜头${i + 1}生成失败（已重试${maxRetries}次）: ${(error as Error).message}`);
+          }
+        }
+      }
+
+      if (segmentUrl) {
+        generatedSegments.push(segmentUrl);
+      }
+    }
+
+    // 步骤4: 拼接所有视频片段
+    await onProgress?.({
+      percentage: 90,
+      step: "拼接视频",
+      message: "正在拼接所有视频片段..."
+    });
+
+    console.log(`🎞️ Concatenating ${generatedSegments.length} VEO 3.1 video segments`);
+
+    // 导入需要的工具
+    const { downloadFile } = await import("@/lib/video/ffmpeg-utils");
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const os = await import('os');
+
+    // 创建临时目录
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'veo31-concat-'));
+    const localSegments: string[] = [];
+
+    let finalUrl: string;
+
+    try {
+      // 下载所有视频片段到本地
+      for (let i = 0; i < generatedSegments.length; i++) {
+        const segmentUrl = generatedSegments[i];
+        const localPath = path.join(tempDir, `segment-${i + 1}.mp4`);
+        await downloadFile(segmentUrl, localPath);
+        localSegments.push(localPath);
+      }
+
+      // ⚠️ Vercel serverless 环境不支持 FFmpeg，暂时返回所有片段 URL
+      // 未来可以使用支持 FFmpeg 的云服务进行视频拼接
+      if (localSegments.length > 1) {
+        console.log(`📦 Returning ${localSegments.length} video segments (FFmpeg not available in serverless)`);
+
+        // 上传所有片段并返回 URL 数组
+        const segmentUrls: string[] = [];
+        for (let i = 0; i < localSegments.length; i++) {
+          const segmentBuffer = await fs.readFile(localSegments[i]);
+          const segmentUrl = await putAndGetUrl(
+            `veo-3.1/${jobId}/segment-${i + 1}.mp4`,
+            new Uint8Array(segmentBuffer),
+            'video/mp4'
+          );
+          segmentUrls.push(segmentUrl);
+        }
+
+        // 使用第一个片段作为主视频（向后兼容）
+        finalUrl = segmentUrls[0];
+
+        console.log(`✅ Uploaded ${segmentUrls.length} segments:`, segmentUrls);
+      } else {
+        // 只有一个片段，直接上传
+        const finalVideoBuffer = await fs.readFile(localSegments[0]);
+        finalUrl = await putAndGetUrl(
+          `veo-3.1/${jobId}/final.mp4`,
+          new Uint8Array(finalVideoBuffer),
+          'video/mp4'
+        );
+      }
+
+      // 清理临时文件
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+
+    } catch (error) {
+      // 确保清理临时文件
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+
+    await onProgress?.({
+      percentage: 100,
+      step: "完成",
+      message: "长视频生成完成！"
+    });
+
+    console.log("✅ Google VEO 3.1 long video generation completed:", finalUrl);
+
+    return {
+      url: finalUrl,
+      segments: generatedSegments,
+      duration: generatedSegments.length * 8 // VEO 3.1 每段8秒
+    };
+
+  } catch (error) {
+    console.error("❌ Google VEO 3.1 long video generation failed:", error);
+    throw new Error(`长视频生成失败: ${(error as Error).message}`);
   }
 }

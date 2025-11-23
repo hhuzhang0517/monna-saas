@@ -21,10 +21,11 @@ async function checkAuthStatus() {
     const serverAuthStatus = await response.json();
     console.log('🔍 Global auth status check:', serverAuthStatus);
     
-    if (serverAuthStatus.hasUser && serverAuthStatus.user !== 'No user') {
+    if (serverAuthStatus.hasUser && serverAuthStatus.user) {
       console.log('✅ User found:', serverAuthStatus.user);
+      // 存储完整的用户信息（包括 name, email, phone 等）
       globalAuthState = {
-        user: { email: serverAuthStatus.user },
+        user: serverAuthStatus.user,
         loading: false,
         initialized: true
       };

@@ -200,7 +200,7 @@ BEGIN
       RETURN plan_name IN ('professional', 'enterprise');
       
     WHEN 'long_video_generation' THEN
-      RETURN plan_name IN ('professional', 'enterprise');
+      RETURN plan_name = 'enterprise';
       
     WHEN 'api_access' THEN
       RETURN plan_name = 'enterprise';

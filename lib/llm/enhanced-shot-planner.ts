@@ -1,4 +1,4 @@
-import { StateGraph, END, MemorySaver } from "@langchain/langgraph";
+import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
 import { BaseMessage, HumanMessage, AIMessage } from "@langchain/core/messages";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { GoogleGenerativeAI, Part } from "@google/generative-ai";
@@ -397,14 +397,17 @@ class LongVideoAgent {
     workflow.addNode("optimizeConsistency", this.optimizeConsistencyNode.bind(this));
     workflow.addNode("finalizeOutput", this.finalizeOutputNode.bind(this));
 
-    // 定义流程
-    workflow.addEdge("analyzeNarrative", "planScenes");
-    workflow.addEdge("planScenes", "optimizeConsistency");
-    workflow.addEdge("optimizeConsistency", "finalizeOutput");
+    // 定义流程 - 设置入口点
+    // 使用类型断言来处理 LangGraph 的类型定义限制
+    (workflow as any).setEntryPoint("analyzeNarrative");
 
-    // 设置入口和出口点
-    workflow.setEntryPoint("analyzeNarrative");
-    workflow.setFinishPoint("finalizeOutput");
+    // 添加节点间的边
+    (workflow as any).addEdge("analyzeNarrative", "planScenes");
+    (workflow as any).addEdge("planScenes", "optimizeConsistency");
+    (workflow as any).addEdge("optimizeConsistency", "finalizeOutput");
+
+    // 设置结束点
+    (workflow as any).addEdge("finalizeOutput", END);
 
     // 编译工作流
     const checkpointer = new MemorySaver();

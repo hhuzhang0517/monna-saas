@@ -1,5 +1,9 @@
 {
+  "regions": ["sin1"],
   "crons": [
-    { "path": "/api/inngest", "schedule": "0 * * * *" }
-  ]
+    { "path": "/api/inngest", "schedule": "0 * * * *" },
+    { "path": "/api/subscriptions/check-expiry", "schedule": "0 9 * * *" }
+  ],
+  "buildCommand": "pnpm run build",
+  "installCommand": "pnpm install --no-frozen-lockfile"
 }

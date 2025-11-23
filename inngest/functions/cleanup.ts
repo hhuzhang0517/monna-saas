@@ -2,7 +2,9 @@ import { inngest } from "@/inngest/client";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
 export const cleanupJobs = inngest.createFunction(
-  { id: "cleanup-jobs" }, 
+  {
+    id: "cleanup-jobs"
+  },
   { cron: "0 * * * *" },
   async () => {
     const supabase = await createSupabaseServer();

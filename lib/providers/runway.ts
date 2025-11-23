@@ -4,37 +4,61 @@ import { putAndGetUrl } from "@/lib/storage";
 const RUNWAY_API_KEY = process.env.RUNWAY_API_KEY!;
 const RUNWAY_API_BASE_URL = "https://api.dev.runwayml.com/v1";
 
-// Runway API 支持的视频比例
-const VALID_RATIOS = ["1280:720", "720:1280", "1104:832", "960:960", "832:1104", "1584:672", "848:480", "640:480"];
+// Runway API 支持的视频比例 (video-to-video)
+const VALID_RATIOS_VIDEO_TO_VIDEO = ["1280:720", "720:1280", "1104:832", "960:960", "832:1104", "1584:672", "848:480", "640:480"];
 
-// 验证并修正ratio参数
+// Runway API 支持的图片转视频比例 (image-to-video)
+const VALID_RATIOS_IMAGE_TO_VIDEO = ["768:1280", "1280:768"];
+
+// 验证并修正ratio参数 (video-to-video)
 function validateAndFixRatio(ratio: string): string {
-  if (!VALID_RATIOS.includes(ratio)) {
-    console.warn(`⚠️ Invalid ratio ${ratio}, using default 1280:720`);
+  if (!VALID_RATIOS_VIDEO_TO_VIDEO.includes(ratio)) {
+    console.warn(`⚠️ Invalid video-to-video ratio ${ratio}, using default 1280:720`);
     return "1280:720";
   }
   return ratio;
 }
 
+// 验证并修正ratio参数 (image-to-video)
+function validateAndFixRatioImageToVideo(ratio: string): string {
+  if (!VALID_RATIOS_IMAGE_TO_VIDEO.includes(ratio)) {
+    console.warn(`⚠️ Invalid image-to-video ratio ${ratio}, using default 1280:768 (landscape)`);
+    return "1280:768"; // 默认使用横屏
+  }
+  return ratio;
+}
+
 // 根据任务类型选择正确的模型
+// 根据 Runway API 文档: https://docs.dev.runwayml.com/guides/models/
 function selectModelForTask(taskType: 'image_to_video' | 'video_to_video' | 'text_to_video', providedModel?: string): string {
-  // 根据任务类型选择最佳模型，基于当前可用的模型
+  // 不同端点支持的模型
+  const videoToVideoModels = ['gen4_aleph']; // video-to-video 只支持 gen4_aleph
+  const imageToVideoModels = ['gen3a_turbo', 'gen3a', 'gen4_turbo', 'gen4_aleph'];
+  const otherModels = ['act_two', 'veo3', 'veo3.1', 'veo3.1_fast'];
+
   switch (taskType) {
     case 'video_to_video':
-      // video-to-video端点：使用gen3a_turbo（经验证可用）
-      if (providedModel && ['gen3a_turbo', 'gen3', 'act_two'].includes(providedModel)) {
+      // video-to-video 端点仅支持 gen4_aleph 模型
+      if (providedModel && videoToVideoModels.includes(providedModel)) {
         return providedModel;
       }
-      return 'gen3a_turbo'; // 使用经过验证的模型
+      return 'gen4_aleph'; // 必须使用 gen4_aleph
+
     case 'image_to_video':
     case 'text_to_video':
     default:
-      // image-to-video端点：继续尝试gen4，如果不行就用gen3a_turbo
-      if (providedModel && ['gen4', 'gen3a_turbo', 'gen3', 'act_two'].includes(providedModel)) {
+      // image-to-video 支持更多模型
+      const allImageModels = [...imageToVideoModels, ...otherModels];
+      if (providedModel && allImageModels.includes(providedModel)) {
         return providedModel;
       }
-      return 'gen3a_turbo'; // 统一使用gen3a_turbo
+      return 'gen3a_turbo'; // 默认使用 gen3a_turbo
   }
+}
+
+// 获取 video-to-video 的模型回退列表（只有一个可用）
+function getVideoToVideoModelFallbacks(): string[] {
+  return ['gen4_aleph']; // video-to-video 仅支持此模型
 }
 
 // 带重试的fetch函数
@@ -87,6 +111,7 @@ export interface RunwayLongVideoOptions {
   attachedImages: string[]; // 附加图片URL数组
   jobId: string;
   shotPlan?: any; // 可选的镜头规划，如果提供则跳过规划步骤
+  model?: string; // 可选的模型名称（如 "veo3.1"）
   onProgress?: (progress: { percentage: number; step: string; message: string }) => Promise<void>;
 }
 
@@ -105,16 +130,13 @@ export async function generateVideoRunway(options: RunwayVideoOptions) {
     referenceImageUrl,
     referenceVideoUrl,
     duration = 5,
-    ratio: rawRatio = "1280:720",
+    ratio: rawRatio = "1280:720", // 默认值，会根据模式调整
     model, // 不设置默认值，由任务类型决定
     fixedImagePath,
     imageToVideo
   } = options;
 
-  // 验证并修正ratio参数
-  const ratio = validateAndFixRatio(rawRatio);
-
-  console.log("🎬 Starting Runway video generation:", { prompt, referenceImageUrl, referenceVideoUrl, duration, ratio, model, fixedImagePath, imageToVideo });
+  console.log("🎬 Starting Runway video generation:", { prompt, referenceImageUrl, referenceVideoUrl, duration, ratio: rawRatio, model, fixedImagePath, imageToVideo });
 
   try {
     // 处理固定图片路径，转换为完整URL
@@ -128,14 +150,18 @@ export async function generateVideoRunway(options: RunwayVideoOptions) {
     // 如果是图片转视频模式，使用专门的处理逻辑
     if (imageToVideo && referenceImageUrl) {
       console.log("📸 Using image-to-video mode");
+      // 对于image-to-video，使用专门的ratio验证（在processImageToVideo内部）
       return await processImageToVideo({
         imageUrl: referenceImageUrl,
         prompt,
         duration,
-        ratio,
+        ratio: rawRatio, // 直接传递原始ratio，在processImageToVideo内部验证
         model
       });
     }
+
+    // 对于video-to-video，验证并修正ratio参数
+    const ratio = validateAndFixRatio(rawRatio);
 
     // 如果有固定图片和用户视频，使用特殊处理逻辑
     if (fixedImageUrl && referenceVideoUrl) {
@@ -181,7 +207,8 @@ export async function generateVideoRunway(options: RunwayVideoOptions) {
     // 如果只有视频输入，使用video-to-video端点处理视频特效
     else if (referenceVideoUrl) {
       console.log("📹 Using video-to-video mode for video effects");
-      return await processVideoToVideo(referenceVideoUrl!, prompt, { model: selectModelForTask('video_to_video', model), duration, ratio });
+      const taskData = await processVideoToVideo(referenceVideoUrl!, prompt, { model: selectModelForTask('video_to_video', model), duration, ratio });
+      return await finishVideoToVideoTask(taskData);
     }
     
     // 根据文档，没有单独的text-to-video端点，使用image_to_video端点
@@ -305,37 +332,46 @@ async function waitForVideoGeneration(taskId: string, maxAttempts: number = 60):
         console.error("❌ Task failed:", failureReason);
         console.error("❌ Failure code:", failureCode);
         console.error("❌ Full task data:", JSON.stringify(taskData, null, 2));
-        
+
         // 根据失败原因提供更具体的错误信息
-        if (failureReason.includes("content policy") || failureReason.includes("policy")) {
-          throw new Error("视频内容不符合平台政策，请修改提示词后重试");
+        if (failureCode === "NO_FACE_FOUND" || failureReason.includes("No face found")) {
+          throw new Error("PERMANENT_FAILURE: 未在图片或视频中检测到人脸，请上传包含清晰人脸的素材");
+        } else if (failureReason.includes("content policy") || failureReason.includes("policy")) {
+          throw new Error("PERMANENT_FAILURE: 视频内容不符合平台政策，请修改提示词后重试");
         } else if (failureReason.includes("timeout") || failureReason.includes("time")) {
           throw new Error("视频生成超时，请稍后重试");
         } else if (failureReason.includes("image") || failureReason.includes("frame")) {
-          throw new Error("关键帧图片处理失败，请重新生成");
+          throw new Error("PERMANENT_FAILURE: 关键帧图片处理失败，请重新上传图片");
         } else if (failureCode === "INTERNAL.BAD_OUTPUT.CODE01") {
           // 立即停止polling并抛出特定错误以触发重试
           throw new Error("RUNWAY_BAD_OUTPUT: 视频生成内容不符合要求，将尝试简化提示词重新生成");
         } else {
-          throw new Error(`视频生成失败: ${failureReason}`);
+          throw new Error(`PERMANENT_FAILURE: 视频生成失败: ${failureReason}`);
         }
       } else if (taskData.status === 'CANCELLED') {
-        throw new Error("视频生成已取消");
+        throw new Error("PERMANENT_FAILURE: 视频生成已取消");
       }
 
       // 等待5秒后重试
       await new Promise(resolve => setTimeout(resolve, 5000));
 
     } catch (error) {
-      // 如果是BAD_OUTPUT错误，立即抛出以触发上层重试
-      if ((error as Error).message && (error as Error).message.includes('RUNWAY_BAD_OUTPUT')) {
+      const errorMessage = (error as Error).message || '';
+
+      // 永久性失败：立即停止轮询并抛出错误
+      if (errorMessage.includes('PERMANENT_FAILURE') ||
+          errorMessage.includes('RUNWAY_BAD_OUTPUT')) {
+        console.error(`❌ Permanent failure detected, stopping polling:`, errorMessage);
         throw error;
       }
-      
+
+      // 达到最大尝试次数：停止轮询
       if (attempt === maxAttempts) {
-        console.error(`❌ Task polling failed after ${maxAttempts} attempts:`, (error as Error).message);
+        console.error(`❌ Task polling failed after ${maxAttempts} attempts:`, errorMessage);
         throw new Error("视频生成超时，请重新尝试");
       }
+
+      // 临时性错误：继续重试
       console.warn(`⚠️ Polling attempt ${attempt} failed, retrying...`);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
@@ -344,37 +380,79 @@ async function waitForVideoGeneration(taskId: string, maxAttempts: number = 60):
   throw new Error("视频生成超时，请稍后重试");
 }
 
-// 处理video-to-video生成
+// 处理video-to-video生成（使用 gen4_aleph 模型）
 async function processVideoToVideo(videoUrl: string, prompt: string, options: { model: string, duration: number, ratio: string }) {
   console.log("🎬 Starting video-to-video processing:", { videoUrl, prompt, options });
-  
-  const requestBody: any = {
-    videoUri: videoUrl,  // 正确的字段名
-    promptText: prompt,
-    model: selectModelForTask('video_to_video', options.model), // 选择正确的video-to-video模型
-    ratio: validateAndFixRatio(options.ratio), // 必须传递ratio参数并验证
-    duration: options.duration // 添加duration参数
-  };
 
-  console.log("📤 Sending video-to-video request:", requestBody);
+  const modelFallbacks = getVideoToVideoModelFallbacks();
+  let lastError: any = null;
 
-  const response = await fetch(`${RUNWAY_API_BASE_URL}/video_to_video`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${RUNWAY_API_KEY}`,
-      "Content-Type": "application/json",
-      "X-Runway-Version": "2024-11-06"
-    },
-    body: JSON.stringify(requestBody)
-  });
+  // 尝试所有可用的模型（目前只有 gen4_aleph）
+  for (const modelToTry of modelFallbacks) {
+    try {
+      console.log(`📋 Trying model: ${modelToTry}`);
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("❌ Runway video-to-video API error:", response.status, errorText);
-    throw new Error("视频特效处理服务暂时不可用，请稍后重试");
+      const requestBody: any = {
+        videoUri: videoUrl,
+        promptText: prompt,
+        model: modelToTry,
+        ratio: validateAndFixRatio(options.ratio),
+        duration: options.duration
+      };
+
+      console.log("📤 Sending video-to-video request:", requestBody);
+
+      const response = await fetch(`${RUNWAY_API_BASE_URL}/video_to_video`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${RUNWAY_API_KEY}`,
+          "Content-Type": "application/json",
+          "X-Runway-Version": "2024-11-06"
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      const responseText = await response.text();
+
+      if (!response.ok) {
+        console.error(`❌ Model ${modelToTry} failed:`, response.status, responseText);
+
+        // 检查是否是模型不可用错误
+        if (response.status === 403 && responseText.includes('not available')) {
+          console.log(`⚠️ Model ${modelToTry} not available, trying next model...`);
+          lastError = new Error(`Model ${modelToTry} not available`);
+          continue; // 尝试下一个模型
+        }
+
+        // 其他错误直接抛出
+        throw new Error(`视频特效处理失败: ${responseText}`);
+      }
+
+      // 成功！
+      const taskData = JSON.parse(responseText);
+      console.log(`✅ Successfully created task with model ${modelToTry}:`, taskData.id);
+
+      // 返回任务数据以继续处理
+      return taskData;
+
+    } catch (error: any) {
+      console.error(`❌ Error with model ${modelToTry}:`, error.message);
+      lastError = error;
+
+      // 如果不是模型不可用错误，直接抛出
+      if (!error.message.includes('not available')) {
+        throw error;
+      }
+    }
   }
 
-  const taskData = await response.json();
+  // 所有模型都失败了
+  console.error("❌ All models failed, last error:", lastError);
+  throw new Error("所有可用模型都无法处理此请求，请检查您的 Runway API 账户权限或联系支持");
+}
+
+// 辅助函数：继续处理 video-to-video 任务
+async function finishVideoToVideoTask(taskData: any) {
   console.log("📋 Video-to-video task created:", taskData.id);
 
   // 轮询等待任务完成
@@ -407,6 +485,92 @@ async function generateTextToVideo(prompt: string, options: { duration: number, 
   return await generateWithDefaultImage(prompt, options);
 }
 
+// VEO模型专用：使用中性起始帧生成视频
+async function generateTextToVideoVEO(options: { prompt: string, duration: number, ratio: string, model: string }) {
+  const { prompt, duration, ratio, model } = options;
+  
+  console.log("🎬 VEO generation with neutral start frame:", { 
+    prompt: prompt.substring(0, 100) + "...", 
+    duration, 
+    ratio, 
+    model 
+  });
+  
+  try {
+    // 创建一个完整尺寸的中性灰色渐变图片（避免触发内容审核）
+    const neutralStartFrame = createNeutralStartFrame(ratio);
+    
+    const requestBody = {
+      promptText: prompt,
+      promptImage: neutralStartFrame, // 使用中性起始帧
+      model: model,
+      ratio: validateAndFixRatioImageToVideo(ratio),
+      duration: duration
+    };
+
+    console.log("📤 Sending VEO generation request with neutral frame:", {
+      promptLength: prompt.length,
+      model,
+      ratio: requestBody.ratio,
+      duration
+    });
+
+    const response = await fetchWithRetry(`${RUNWAY_API_BASE_URL}/image_to_video`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${RUNWAY_API_KEY}`,
+        "Content-Type": "application/json",
+        "X-Runway-Version": "2024-11-06"
+      },
+      body: JSON.stringify(requestBody)
+    }, 3);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("❌ Runway VEO generation API error:", response.status, errorText);
+      throw new Error(`VEO视频生成失败: ${errorText}`);
+    }
+
+    const taskData = await response.json();
+    console.log("📋 VEO generation task created:", taskData.id);
+
+    // 轮询等待任务完成
+    const videoUrl = await waitForVideoGeneration(taskData.id);
+    
+    // 下载并存储视频到Supabase Storage
+    console.log("💾 Downloading and storing VEO video...");
+    const videoResponse = await fetch(videoUrl);
+    if (!videoResponse.ok) {
+      console.error("❌ Failed to download VEO video:", videoResponse.status);
+      throw new Error("VEO视频下载失败");
+    }
+
+    const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
+    const storageUrl = await putAndGetUrl(
+      `runway-veo/${crypto.randomUUID()}.mp4`, 
+      videoBuffer, 
+      "video/mp4"
+    );
+
+    console.log("✅ VEO video stored successfully:", storageUrl);
+    return storageUrl;
+
+  } catch (error) {
+    console.error("❌ VEO generation failed:", error);
+    throw new Error(`VEO视频生成失败: ${(error as Error).message}`);
+  }
+}
+
+// 创建中性起始帧（灰色渐变，避免触发内容审核）
+function createNeutralStartFrame(ratio: string): string {
+  // Runway API 不支持 SVG，直接使用简单的 PNG data URI
+  // 这是一个 1x1 像素的深灰色 PNG 图片，Runway 会自动缩放到所需尺寸
+  const neutralPngDataUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mM0NDRkAAAAAgIBXBBTigAAAABJRU5ErkJggg==";
+
+  console.log("🎨 Using neutral 1x1 PNG as start frame (Runway will scale automatically)");
+  return neutralPngDataUri;
+}
+
 // 使用默认图片生成视频（适用于纯文本生成）
 async function generateWithDefaultImage(prompt: string, options: { duration: number, ratio: string, model: string }) {
   console.log("🎨 Using default image for video generation");
@@ -419,7 +583,7 @@ async function generateWithDefaultImage(prompt: string, options: { duration: num
       promptText: prompt,
       promptImage: defaultImageUrl,
       model: selectModelForTask('image_to_video'), // 使用image-to-video模型
-      ratio: validateAndFixRatio(options.ratio),
+      ratio: validateAndFixRatioImageToVideo(options.ratio),
       duration: options.duration
     };
 
@@ -491,7 +655,7 @@ async function generateWithSolidBackground(prompt: string, options: { duration: 
       promptText: prompt,
       promptImage: solidImageUrl,
       model: selectModelForTask('image_to_video'), // 使用image-to-video模型
-      ratio: validateAndFixRatio(options.ratio),
+      ratio: validateAndFixRatioImageToVideo(options.ratio),
       duration: options.duration
     };
 
@@ -548,7 +712,7 @@ async function generateWithSolidBackground(prompt: string, options: { duration: 
 
 // 长视频生成主函数 - 基于LLM规划器 + Runway连续生成
 export async function generateLongVideoRunway(options: RunwayLongVideoOptions) {
-  const { prompt, attachedImages, jobId, shotPlan: providedShotPlan, onProgress } = options;
+  const { prompt, attachedImages, jobId, shotPlan: providedShotPlan, model, onProgress } = options;
   
   console.log("🎬 Starting long video generation:", { 
     jobId, 
@@ -582,7 +746,7 @@ export async function generateLongVideoRunway(options: RunwayLongVideoOptions) {
       });
       
       const { generateShotPlan } = await import("@/lib/llm/shot-planner");
-      shotPlan = await generateShotPlan(prompt, 65, "1280:720"); // 默认65秒，Runway支持的比例
+      shotPlan = await generateShotPlan(prompt, 65, "1280:768"); // 默认65秒，Runway image_to_video支持的比例
       
       console.log("📋 Generated shot plan:", {
         totalShots: shotPlan.shots.length,
@@ -591,6 +755,9 @@ export async function generateLongVideoRunway(options: RunwayLongVideoOptions) {
       });
     }
 
+    // 检查是否使用VEO模型
+    const isVeoModel = model && (model.includes('veo') || model.includes('VEO'));
+    
     // 步骤2: 准备首帧关键帧
     await onProgress?.({ 
       percentage: 10, 
@@ -598,37 +765,28 @@ export async function generateLongVideoRunway(options: RunwayLongVideoOptions) {
       message: "正在准备首帧关键帧..." 
     });
     
-    let currentKeyframeUrl: string;
+    let currentKeyframeUrl: string | null = null;
+    let firstShotGenerated = false; // 标记第一个镜头是否已生成
     
     if (attachedImages.length > 0) {
       // 使用用户上传的第一张图片作为首帧
       currentKeyframeUrl = attachedImages[0];
       console.log("🖼️ Using user uploaded image as first keyframe");
+    } else if (isVeoModel) {
+      // VEO模型：第一个镜头使用纯文本生成，然后提取尾帧
+      console.log("🎬 VEO model - will generate first shot with text-to-video");
+      // 不设置currentKeyframeUrl，在循环中特殊处理第一个镜头
     } else {
-      // 使用T2I生成首帧
+      // 非VEO模型：使用默认图片方案生成首帧
       console.log("🎨 Generating first keyframe with T2I");
-      const firstShotPrompt = shotPlan.shots[0]?.prompt || shotPlan.shots[0]?.originalPrompt || shotPlan.shots[0]?.prompt;
+      const firstShotPrompt = shotPlan.shots[0]?.prompt || "A cinematic establishing shot";
       
-      console.log("🔍 First shot prompt debug:", {
-        hasShots: !!shotPlan.shots,
-        shotCount: shotPlan.shots?.length || 0,
-        firstShotPrompt: shotPlan.shots[0]?.prompt?.substring(0, 100) + "...",
-        firstShotOriginalPrompt: shotPlan.shots[0]?.originalPrompt?.substring(0, 100) + "...",
-        usingPrompt: firstShotPrompt?.substring(0, 100) + "...",
-        isEnglish: /^[a-zA-Z\s.,!?;:'"()-]+$/.test(firstShotPrompt?.substring(0, 50) || "")
-      });
-      
-      // 确保使用英文提示词
-      const englishPrompt = shotPlan.shots[0]?.prompt || shotPlan.shots[0]?.originalPrompt || "A cinematic establishing shot";
-      
-      // 使用我们的默认图片方案生成首帧
-      const firstFrameResult = await generateWithDefaultImage(englishPrompt, {
-        duration: 5, // 临时生成5秒视频来获取首帧
+      const firstFrameResult = await generateWithDefaultImage(firstShotPrompt, {
+        duration: 5,
         ratio: shotPlan.ratio,
         model: selectModelForTask('image_to_video')
       });
       
-      // 下载视频并提取首帧
       const { extractLastFrame, downloadFile, fileToDataUri } = await import("@/lib/video/ffmpeg-utils");
       const tempVideoPath = `/tmp/${crypto.randomUUID()}.mp4`;
       await downloadFile(firstFrameResult.url, tempVideoPath);
@@ -651,19 +809,34 @@ export async function generateLongVideoRunway(options: RunwayLongVideoOptions) {
       });
 
       try {
-        // 生成当前镜头的视频片段
-        const segmentUrl = await generateVideoSegmentWithKeyframe({
-          prompt: shot.prompt,
-          keyframeUrl: currentKeyframeUrl,
-          duration: shot.duration_s,
-          ratio: shotPlan.ratio
-        });
+        let segmentUrl: string;
+        
+        // VEO模型特殊处理：第一个镜头用text-to-video，后续镜头用image-to-video保证连贯性
+        if (isVeoModel && i === 0 && !currentKeyframeUrl) {
+          // VEO第一个镜头：使用纯文本生成
+          console.log(`🎬 VEO first shot - using text-to-video`);
+          segmentUrl = await generateTextToVideoVEO({
+            prompt: shot.prompt,
+            duration: shot.duration_s,
+            ratio: shotPlan.ratio,
+            model: model || 'veo3.1'
+          });
+        } else {
+          // 其他情况：使用关键帧生成（保证连贯性）
+          console.log(`🎬 Shot ${i + 1} - using image-to-video with keyframe`);
+          segmentUrl = await generateVideoSegmentWithKeyframe({
+            prompt: shot.prompt,
+            keyframeUrl: currentKeyframeUrl!,
+            duration: shot.duration_s,
+            ratio: shotPlan.ratio,
+            model: model // 传递模型参数（VEO或其他）
+          });
+        }
         
         generatedSegments.push(segmentUrl);
-        
         console.log(`✅ Generated shot ${i + 1}/${totalShots}:`, segmentUrl);
         
-        // 如果不是最后一个镜头，提取尾帧作为下一个镜头的首帧
+        // 提取尾帧作为下一个镜头的首帧（保证连贯性）
         if (i < totalShots - 1) {
           await onProgress?.({ 
             percentage: progressBase + (70 / totalShots) * 0.5, 
@@ -747,14 +920,16 @@ async function generateVideoSegmentWithKeyframe({
   prompt,
   keyframeUrl,
   duration,
-  ratio
+  ratio,
+  model
 }: {
   prompt: string;
   keyframeUrl: string;
   duration: number;
   ratio: string;
+  model?: string;
 }): Promise<string> {
-  console.log(`🎬 Generating video segment:`, { prompt: prompt.substring(0, 50) + "...", duration, ratio });
+  console.log(`🎬 Generating video segment:`, { prompt: prompt.substring(0, 50) + "...", duration, ratio, model });
   
   // 尝试最多3次生成
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -779,7 +954,7 @@ async function generateVideoSegmentWithKeyframe({
         console.log(`🔄 New prompt: ${adjustedPrompt}`);
       }
       
-      return await generateSingleVideoSegment({ prompt: adjustedPrompt, keyframeUrl, duration, ratio });
+      return await generateSingleVideoSegment({ prompt: adjustedPrompt, keyframeUrl, duration, ratio, model });
     } catch (error) {
       console.warn(`⚠️ Video segment generation attempt ${attempt} failed:`, (error as Error).message);
       
@@ -813,12 +988,14 @@ async function generateSingleVideoSegment({
   prompt,
   keyframeUrl,
   duration,
-  ratio
+  ratio,
+  model
 }: {
   prompt: string;
   keyframeUrl: string;
   duration: number;
   ratio: string;
+  model?: string;
 }): Promise<string> {
   // 如果keyframeUrl是data URI，直接使用；否则需要转换
   let promptImage = keyframeUrl;
@@ -833,8 +1010,8 @@ async function generateSingleVideoSegment({
   const requestBody = {
     promptText: prompt,
     promptImage: promptImage,
-    model: selectModelForTask('image_to_video'), // 使用image-to-video模型
-    ratio: validateAndFixRatio(ratio),
+    model: selectModelForTask('image_to_video', model), // 使用提供的模型或默认模型
+    ratio: validateAndFixRatioImageToVideo(ratio),
     duration: duration
   };
 
@@ -1322,7 +1499,7 @@ async function processImageToVideo(options: {
       promptText: prompt,
       promptImage: imageUrl, // 用户上传的图片
       model: selectModelForTask('image_to_video', model),
-      ratio: validateAndFixRatio(ratio)
+      ratio: validateAndFixRatioImageToVideo(ratio) // 使用image-to-video专用的ratio验证
     };
 
     // 添加duration参数（如果支持）

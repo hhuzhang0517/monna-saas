@@ -12,15 +12,36 @@ const nextConfig: NextConfig = {
   ],
   experimental: {
     ppr: false,  // 暂时关闭 PPR
-    clientSegmentCache: false,  // 暂时关闭客户端段缓存
-    nodeMiddleware: true
+    webpackBuildWorker: true
   },
+
+  // 域名重定向：非 www 域名重定向到 www 域名 (SEO 最佳实践)
+  async redirects() {
+    return [
+      {
+        source: '/:path*',
+        has: [
+          {
+            type: 'host',
+            value: 'monna.us',
+          },
+        ],
+        destination: 'https://www.monna.us/:path*',
+        permanent: true, // 301 永久重定向
+      },
+    ];
+  },
+
   async headers() {
     return [{
       source: "/:path*",
       headers: [
         { key: "X-Content-Type-Options",   value: "nosniff" },
-        { key: "Referrer-Policy",          value: "strict-origin-when-cross-origin" }
+        { key: "Referrer-Policy",          value: "strict-origin-when-cross-origin" },
+        // SEO: 添加更多安全头
+        { key: "X-Frame-Options",          value: "DENY" },
+        { key: "X-XSS-Protection",         value: "1; mode=block" },
+        { key: "Permissions-Policy",       value: "camera=(), microphone=(), geolocation=()" },
       ]
     }];
   }
